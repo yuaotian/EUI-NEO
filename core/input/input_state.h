@@ -29,6 +29,10 @@ struct PointerState {
     bool lastRightDown = false;
     bool down = false;
     bool rightDown = false;
+    bool pressQueued = false;
+    bool releaseQueued = false;
+    bool rightPressQueued = false;
+    bool rightReleaseQueued = false;
     bool hasPosition = false;
     bool inside = false;
 };
@@ -129,6 +133,14 @@ inline bool queuedPointerButtonDown(window::Handle window, int button) {
 
 } // namespace detail
 
+struct PointerButtonEdges {
+    // 同一轮消息泵可能先按下再释放，两个边沿必须分别保留到下一次 tick。
+    bool pressed = false;
+    bool released = false;
+    bool rightPressed = false;
+    bool rightReleased = false;
+};
+
 inline void queuePointerMotion(window::Handle window,
                                double x,
                                double y,
@@ -154,10 +166,29 @@ inline void queuePointerButton(window::Handle window,
     state.hasPosition = true;
     state.inside = true;
     if (button == 0) {
+        state.pressQueued = state.pressQueued || down;
+        state.releaseQueued = state.releaseQueued || !down;
         state.down = down;
     } else if (button == 1) {
+        state.rightPressQueued = state.rightPressQueued || down;
+        state.rightReleaseQueued = state.rightReleaseQueued || !down;
         state.rightDown = down;
     }
+}
+
+inline PointerButtonEdges consumePointerButtonEdges(window::Handle window) {
+    detail::PointerState& state = detail::pointerState(window);
+    PointerButtonEdges edges{
+        state.pressQueued,
+        state.releaseQueued,
+        state.rightPressQueued,
+        state.rightReleaseQueued
+    };
+    state.pressQueued = false;
+    state.releaseQueued = false;
+    state.rightPressQueued = false;
+    state.rightReleaseQueued = false;
+    return edges;
 }
 
 inline void queuePointerPresence(window::Handle window, bool inside) {
@@ -172,6 +203,10 @@ inline void clearPointerInput(window::Handle window) {
     detail::PointerState& state = iterator->second;
     state.down = false;
     state.rightDown = false;
+    state.pressQueued = false;
+    state.releaseQueued = false;
+    state.rightPressQueued = false;
+    state.rightReleaseQueued = false;
     state.hasPosition = false;
     state.inside = false;
 }
@@ -264,7 +299,11 @@ inline bool hasPendingPointerInput(window::Handle window, float dpiScale = 1.0f)
     y *= dpiScale;
 
     const detail::PointerState& state = stateIt->second;
-    return x != state.lastX ||
+    return state.pressQueued ||
+           state.releaseQueued ||
+           state.rightPressQueued ||
+           state.rightReleaseQueued ||
+           x != state.lastX ||
            y != state.lastY ||
            core::window::isMouseButtonDown(window, 0) != state.lastDown ||
            core::window::isMouseButtonDown(window, 1) != state.lastRightDown;
@@ -280,6 +319,7 @@ inline void releaseInputQueue(window::Handle window) {
 
 inline PointerEvent readPointerEvent(window::Handle window, float dpiScale = 1.0f) {
     detail::PointerState& state = detail::pointerState(window);
+    const PointerButtonEdges queuedEdges = consumePointerButtonEdges(window);
 
     double x = 0.0;
     double y = 0.0;
@@ -294,10 +334,10 @@ inline PointerEvent readPointerEvent(window::Handle window, float dpiScale = 1.0
     event.deltaY = y - state.lastY;
     event.down = core::window::isMouseButtonDown(window, 0);
     event.rightDown = core::window::isMouseButtonDown(window, 1);
-    event.pressedThisFrame = event.down && !state.lastDown;
-    event.releasedThisFrame = !event.down && state.lastDown;
-    event.rightPressedThisFrame = event.rightDown && !state.lastRightDown;
-    event.rightReleasedThisFrame = !event.rightDown && state.lastRightDown;
+    event.pressedThisFrame = queuedEdges.pressed || (event.down && !state.lastDown);
+    event.releasedThisFrame = queuedEdges.released || (!event.down && state.lastDown);
+    event.rightPressedThisFrame = queuedEdges.rightPressed || (event.rightDown && !state.lastRightDown);
+    event.rightReleasedThisFrame = queuedEdges.rightReleased || (!event.rightDown && state.lastRightDown);
 
     state.lastX = x;
     state.lastY = y;

@@ -108,6 +108,20 @@ void installInputCallbacks(Handle window) {
 
     auto* glfwWindow = static_cast<GLFWwindow*>(window);
     eui_ime_install_message_filter(glfwWindow);
+    glfwSetMouseButtonCallback(glfwWindow, [](GLFWwindow* currentWindow, int button, int action, int) {
+        if ((button != GLFW_MOUSE_BUTTON_LEFT && button != GLFW_MOUSE_BUTTON_RIGHT) ||
+            (action != GLFW_PRESS && action != GLFW_RELEASE)) {
+            return;
+        }
+        double x = 0.0;
+        double y = 0.0;
+        glfwGetCursorPos(currentWindow, &x, &y);
+        core::queuePointerButton(currentWindow,
+                                 x,
+                                 y,
+                                 button == GLFW_MOUSE_BUTTON_RIGHT ? 1 : 0,
+                                 action == GLFW_PRESS);
+    });
     glfwSetCharCallback(glfwWindow, [](GLFWwindow* currentWindow, unsigned int codepoint) {
         core::detail::InputQueue& queue = core::detail::inputQueue(currentWindow);
         core::detail::appendUtf8(queue.text, codepoint);
