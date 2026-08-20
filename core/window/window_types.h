@@ -20,7 +20,10 @@ enum class RenderApi {
 
 enum class WindowRole {
     Main,
-    Tool
+    Tool,
+    Dialog,
+    Popup,
+    Overlay
 };
 
 struct WindowPlacement {
@@ -44,6 +47,12 @@ struct WindowCreateRequest {
     bool highDpi = true;
     bool modal = false;
     bool visible = true;
+    bool borderless = false;
+    bool transparentFramebuffer = false;
+    bool alwaysOnTop = false;
+    bool noActivate = false;
+    bool clickThrough = false;
+    bool focusOnShow = true;
     WindowRole role = WindowRole::Main;
     // owner 是后端窗口句柄，独立于 OpenGL context share 使用的 parent。
     Handle owner = nullptr;

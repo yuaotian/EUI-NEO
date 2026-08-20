@@ -31,8 +31,15 @@ struct WindowConfig {
     bool resizable = true;
     bool highDpi = true;
     bool visible = true;
+    bool borderless = false;
+    bool transparentFramebuffer = false;
+    bool alwaysOnTop = false;
+    bool noActivate = false;
+    bool clickThrough = false;
+    bool focusOnShow = true;
     WindowRole role = WindowRole::Main;
-    // 仅 Tool 可设置 owner，且必须引用同一 host 中已经存在的 Main。
+    // Popup 强制 borderless/noActivate；Overlay 另强制 transparentFramebuffer/alwaysOnTop。
+    // Tool 仅允许 Main owner；Dialog 必填、Popup 可选，且二者 owner 必须可激活并属于同一 host。
     WindowId owner = kInvalidWindowId;
     // positioned=false 时由平台决定 normal bounds，但仍保留 maximized 首次显示状态。
     std::optional<WindowPlacement> initialPlacement;
@@ -70,7 +77,10 @@ public:
     WindowId createWindow(const WindowConfig& config);
     bool showWindow(WindowId id);
     bool hideWindow(WindowId id);
-    // Main 仍拥有 Tool 时返回 false，调用方必须先显式销毁 Tool。
+    bool setWindowAlwaysOnTop(WindowId id, bool enabled);
+    bool setWindowClickThrough(WindowId id, bool enabled);
+    bool setWindowPlacement(WindowId id, const WindowPlacement& placement);
+    // 窗口仍有 owned child 时返回 false，调用方必须先显式销毁 child。
     bool destroyWindow(WindowId id);
     bool isVisible(WindowId id) const;
     bool shouldClose(WindowId id) const;

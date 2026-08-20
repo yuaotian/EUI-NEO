@@ -6,23 +6,37 @@
 #include "core/render/render_surface.h"
 #include "core/window/window_backend.h"
 
-#ifndef GLFW_INCLUDE_NONE
-#define GLFW_INCLUDE_NONE
-#endif
-#include <GLFW/glfw3.h>
-
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
 #include <utility>
 
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
+#ifndef GLFW_INCLUDE_NONE
+#define GLFW_INCLUDE_NONE
+#endif
+#include <GLFW/glfw3.h>
+
 namespace eui {
 
 namespace {
 
+struct EuiAppHostState;
+
 struct HostedWindow {
+    EuiAppHostState* hostState = nullptr;
     WindowId id = kInvalidWindowId;
     GLFWwindow* window = nullptr;
     app::DslWindowRuntime runtime;
@@ -33,16 +47,137 @@ struct HostedWindow {
     bool closeRequested = false;
     WindowRole role = WindowRole::Main;
     WindowId owner = kInvalidWindowId;
+    bool modal = false;
+    bool modalActive = false;
+    bool borderless = false;
+    bool noActivate = false;
+    bool alwaysOnTop = false;
+    bool clickThrough = false;
     bool maximizeOnFirstShow = false;
     double lastTick = 0.0;
     double nextDeadline = std::numeric_limits<double>::infinity();
 };
 
+struct ModalOwnerState {
+    std::size_t visibleModalCount = 0;
+    bool restoreEnabled = false;
+};
+
 struct EuiAppHostState {
     bool initialized = false;
+    bool shuttingDown = false;
     WindowId nextWindowId = 1;
     std::map<WindowId, std::unique_ptr<HostedWindow>> windows;
+    std::map<WindowId, ModalOwnerState> modalOwners;
 };
+
+WindowConfig normalizedWindowConfig(const WindowConfig& config) {
+    WindowConfig result = config;
+    if (result.role == WindowRole::Popup) {
+        result.borderless = true;
+        result.noActivate = true;
+    } else if (result.role == WindowRole::Overlay) {
+        result.borderless = true;
+        result.transparentFramebuffer = true;
+        result.alwaysOnTop = true;
+        result.noActivate = true;
+    }
+    if (result.noActivate) {
+        result.focusOnShow = false;
+    }
+    if (result.modal && result.role == WindowRole::Dialog) {
+        result.focusOnShow = true;
+    }
+    return result;
+}
+
+HostedWindow* newestVisibleModalChild(EuiAppHostState& state,
+                                      WindowId owner,
+                                      WindowId excluded = kInvalidWindowId) {
+    for (auto iterator = state.windows.rbegin(); iterator != state.windows.rend(); ++iterator) {
+        HostedWindow* candidate = iterator->second.get();
+        if (candidate != nullptr && candidate->id != excluded && candidate->modal &&
+            candidate->visible && candidate->owner == owner) {
+            return candidate;
+        }
+    }
+    return nullptr;
+}
+
+#if defined(_WIN32)
+HWND nativeHwnd(const HostedWindow& hosted) {
+    return static_cast<HWND>(core::window::nativeWindowInfo(hosted.window).platformWindow);
+}
+#endif
+
+void focusHostedWindow(HostedWindow* hosted) {
+    if (hosted != nullptr && hosted->visible && !hosted->noActivate) {
+        glfwFocusWindow(hosted->window);
+    }
+}
+
+void activateModalOwner(EuiAppHostState& state, HostedWindow& modal) {
+    if (!modal.modal || modal.modalActive || modal.owner == kInvalidWindowId) {
+        return;
+    }
+    const auto ownerIterator = state.windows.find(modal.owner);
+    if (ownerIterator == state.windows.end() || !ownerIterator->second) {
+        return;
+    }
+
+    ModalOwnerState& ownerState = state.modalOwners[modal.owner];
+#if defined(_WIN32)
+    HWND ownerHwnd = nativeHwnd(*ownerIterator->second);
+    if (ownerState.visibleModalCount == 0 && ownerHwnd != nullptr && IsWindow(ownerHwnd) != FALSE) {
+        ownerState.restoreEnabled = IsWindowEnabled(ownerHwnd) != FALSE;
+        if (ownerState.restoreEnabled) {
+            EnableWindow(ownerHwnd, FALSE);
+        }
+    }
+#endif
+    ++ownerState.visibleModalCount;
+    modal.modalActive = true;
+}
+
+void deactivateModalOwner(EuiAppHostState& state, HostedWindow& modal, bool restoreFocus) {
+    if (!modal.modalActive || modal.owner == kInvalidWindowId) {
+        return;
+    }
+    modal.modalActive = false;
+
+    const auto ownerStateIterator = state.modalOwners.find(modal.owner);
+    if (ownerStateIterator == state.modalOwners.end()) {
+        return;
+    }
+    ModalOwnerState& ownerState = ownerStateIterator->second;
+    if (ownerState.visibleModalCount > 0) {
+        --ownerState.visibleModalCount;
+    }
+    if (ownerState.visibleModalCount > 0) {
+        if (restoreFocus) {
+            focusHostedWindow(newestVisibleModalChild(state, modal.owner, modal.id));
+        }
+        return;
+    }
+
+    const bool restoreEnabled = ownerState.restoreEnabled;
+    state.modalOwners.erase(ownerStateIterator);
+    const auto ownerIterator = state.windows.find(modal.owner);
+    if (ownerIterator == state.windows.end() || !ownerIterator->second) {
+        return;
+    }
+#if defined(_WIN32)
+    HWND ownerHwnd = nativeHwnd(*ownerIterator->second);
+    if (restoreEnabled && ownerHwnd != nullptr && IsWindow(ownerHwnd) != FALSE) {
+        EnableWindow(ownerHwnd, TRUE);
+    }
+#else
+    (void)restoreEnabled;
+#endif
+    if (restoreEnabled && restoreFocus && !state.shuttingDown) {
+        focusHostedWindow(ownerIterator->second.get());
+    }
+}
 
 float windowDpiScale(GLFWwindow* window) {
     float scaleX = 1.0f;
@@ -122,10 +257,13 @@ void installWindowCallbacks(HostedWindow& hosted) {
             requestFullPaint(*hosted);
         }
     });
-    glfwSetWindowFocusCallback(hosted.window, [](GLFWwindow* current, int) {
+    glfwSetWindowFocusCallback(hosted.window, [](GLFWwindow* current, int focused) {
         auto* hosted = static_cast<HostedWindow*>(glfwGetWindowUserPointer(current));
         if (hosted != nullptr) {
             hosted->paintRequested = true;
+            if (focused == GLFW_TRUE && hosted->hostState != nullptr) {
+                focusHostedWindow(newestVisibleModalChild(*hosted->hostState, hosted->id));
+            }
         }
     });
     glfwSetWindowIconifyCallback(hosted.window, [](GLFWwindow* current, int iconified) {
@@ -141,6 +279,14 @@ void installWindowCallbacks(HostedWindow& hosted) {
     glfwSetWindowCloseCallback(hosted.window, [](GLFWwindow* current) {
         auto* hosted = static_cast<HostedWindow*>(glfwGetWindowUserPointer(current));
         if (hosted != nullptr) {
+            if (hosted->hostState != nullptr) {
+                HostedWindow* modal = newestVisibleModalChild(*hosted->hostState, hosted->id);
+                if (modal != nullptr) {
+                    glfwSetWindowShouldClose(current, GLFW_FALSE);
+                    focusHostedWindow(modal);
+                    return;
+                }
+            }
             // 关闭请求只记录状态；销毁由宿主显式决定，避免误退出后台 App。
             hosted->closeRequested = true;
         }
@@ -198,20 +344,21 @@ void EuiAppHost::shutdown() {
         return;
     }
 
-    // Win32 会随 owner 自动销毁 owned HWND；必须先释放 Tool，避免留下失效的 GLFW/IME 状态。
-    for (auto& entry : impl_->state.windows) {
-        if (entry.second && entry.second->role == WindowRole::Tool) {
-            destroyHostedWindow(entry.second);
-        }
-    }
-    for (auto& entry : impl_->state.windows) {
-        if (entry.second) {
-            destroyHostedWindow(entry.second);
+    impl_->state.shuttingDown = true;
+    // owner 只能引用更早创建的窗口；逆 WindowId 销毁即可统一保证所有 owned child 先释放。
+    for (auto iterator = impl_->state.windows.rbegin();
+         iterator != impl_->state.windows.rend(); ++iterator) {
+        if (iterator->second) {
+            iterator->second->visible = false;
+            deactivateModalOwner(impl_->state, *iterator->second, false);
+            destroyHostedWindow(iterator->second);
         }
     }
     impl_->state.windows.clear();
+    impl_->state.modalOwners.clear();
     glfwTerminate();
     impl_->state.initialized = false;
+    impl_->state.shuttingDown = false;
     impl_->state.nextWindowId = 1;
 }
 
@@ -224,48 +371,69 @@ double EuiAppHost::timeSeconds() const {
 }
 
 WindowId EuiAppHost::createWindow(const WindowConfig& config) {
-    if (!impl_->state.initialized || !config.compose ||
-        config.width <= 0 || config.height <= 0 ||
-        config.minWidth < 0 || config.minHeight < 0 ||
-        (config.initialPlacement && !validPlacementBounds(*config.initialPlacement))) {
+    WindowConfig effective = normalizedWindowConfig(config);
+    if (!impl_->state.initialized || !effective.compose ||
+        effective.width <= 0 || effective.height <= 0 ||
+        effective.minWidth < 0 || effective.minHeight < 0 ||
+        (effective.initialPlacement && !validPlacementBounds(*effective.initialPlacement)) ||
+        (effective.clickThrough && !effective.borderless) ||
+        (effective.modal && (effective.role != WindowRole::Dialog || effective.noActivate))) {
         return kInvalidWindowId;
     }
 
     HostedWindow* owner = nullptr;
-    if (config.role == WindowRole::Tool) {
-        const auto ownerIterator = impl_->state.windows.find(config.owner);
-        if (config.owner == kInvalidWindowId || ownerIterator == impl_->state.windows.end() ||
-            !ownerIterator->second || ownerIterator->second->role != WindowRole::Main) {
+    const bool ownerRequired = effective.role == WindowRole::Tool ||
+        effective.role == WindowRole::Dialog;
+    const bool ownerAllowed = ownerRequired || effective.role == WindowRole::Popup;
+    if (effective.owner != kInvalidWindowId) {
+        if (!ownerAllowed) {
+            return kInvalidWindowId;
+        }
+        const auto ownerIterator = impl_->state.windows.find(effective.owner);
+        if (ownerIterator == impl_->state.windows.end() || !ownerIterator->second) {
             return kInvalidWindowId;
         }
         owner = ownerIterator->second.get();
-    } else if (config.owner != kInvalidWindowId) {
+    } else if (ownerRequired) {
+        return kInvalidWindowId;
+    }
+    if (effective.role == WindowRole::Tool && owner->role != WindowRole::Main) {
+        return kInvalidWindowId;
+    }
+    if (owner != nullptr && owner->noActivate &&
+        (effective.role == WindowRole::Dialog || effective.role == WindowRole::Popup)) {
         return kInvalidWindowId;
     }
 
     app::DslWindowRequest request;
-    request.title = config.title;
-    request.pageId = config.pageId;
-    request.clearColor = config.clearColor;
-    request.width = config.width;
-    request.height = config.height;
-    request.modal = config.modal;
-    request.compose = config.compose;
+    request.title = effective.title;
+    request.pageId = effective.pageId;
+    request.clearColor = effective.clearColor;
+    request.width = effective.width;
+    request.height = effective.height;
+    request.modal = effective.modal;
+    request.compose = effective.compose;
 
     core::window::WindowCreateRequest nativeRequest;
-    nativeRequest.width = config.width;
-    nativeRequest.height = config.height;
-    nativeRequest.minWidth = config.minWidth;
-    nativeRequest.minHeight = config.minHeight;
+    nativeRequest.width = effective.width;
+    nativeRequest.height = effective.height;
+    nativeRequest.minWidth = effective.minWidth;
+    nativeRequest.minHeight = effective.minHeight;
     nativeRequest.title = request.title.c_str();
-    nativeRequest.resizable = config.resizable;
-    nativeRequest.highDpi = config.highDpi;
-    nativeRequest.modal = config.modal;
+    nativeRequest.resizable = effective.resizable;
+    nativeRequest.highDpi = effective.highDpi;
+    nativeRequest.modal = effective.modal;
     // hosted 先完成角色、placement、renderer、Runtime 与输入链，再按 config.visible 显式显示。
     nativeRequest.visible = false;
-    nativeRequest.role = config.role;
+    nativeRequest.borderless = effective.borderless;
+    nativeRequest.transparentFramebuffer = effective.transparentFramebuffer;
+    nativeRequest.alwaysOnTop = effective.alwaysOnTop;
+    nativeRequest.noActivate = effective.noActivate;
+    nativeRequest.clickThrough = effective.clickThrough;
+    nativeRequest.focusOnShow = effective.focusOnShow;
+    nativeRequest.role = effective.role;
     nativeRequest.owner = owner != nullptr ? owner->window : nullptr;
-    nativeRequest.initialPlacement = config.initialPlacement;
+    nativeRequest.initialPlacement = effective.initialPlacement;
     nativeRequest.renderApi = core::render::windowRenderApi();
     // WindowCreateRequest::parent 当前表示 OpenGL context share，不是 HWND 父子关系。
     nativeRequest.parent = nullptr;
@@ -283,14 +451,20 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     }
 
     auto hosted = std::make_unique<HostedWindow>();
+    hosted->hostState = &impl_->state;
     hosted->id = impl_->state.nextWindowId++;
     hosted->window = window;
     hosted->renderer = std::move(renderer);
-    hosted->visible = config.visible;
-    hosted->role = config.role;
-    hosted->owner = config.owner;
+    hosted->visible = effective.visible;
+    hosted->role = effective.role;
+    hosted->owner = effective.owner;
+    hosted->modal = effective.modal;
+    hosted->borderless = effective.borderless;
+    hosted->noActivate = effective.noActivate;
+    hosted->alwaysOnTop = effective.alwaysOnTop;
+    hosted->clickThrough = effective.clickThrough;
     hosted->maximizeOnFirstShow =
-        config.initialPlacement && config.initialPlacement->maximized;
+        effective.initialPlacement && effective.initialPlacement->maximized;
     hosted->lastTick = core::window::timeSeconds();
     hosted->nextDeadline = hosted->lastTick;
     // hosted 模式不依赖 standalone app 配置；窗口缩放由 DPI 和此显式值决定。
@@ -301,13 +475,15 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     installWindowCallbacks(*hosted);
 
     const WindowId id = hosted->id;
-    if (config.visible) {
-        showHostedWindow(*hosted);
+    impl_->state.windows.emplace(id, std::move(hosted));
+    HostedWindow& stored = *impl_->state.windows.at(id);
+    if (effective.visible) {
+        activateModalOwner(impl_->state, stored);
+        showHostedWindow(stored);
     } else {
         glfwHideWindow(window);
-        hosted->paintRequested = false;
+        stored.paintRequested = false;
     }
-    impl_->state.windows.emplace(id, std::move(hosted));
     return id;
 }
 
@@ -318,11 +494,15 @@ bool EuiAppHost::showWindow(WindowId id) {
     }
 
     HostedWindow& hosted = *iterator->second;
+    const bool wasVisible = hosted.visible;
     hosted.visible = true;
     hosted.closeRequested = false;
     glfwSetWindowShouldClose(hosted.window, GLFW_FALSE);
     if (glfwGetWindowAttrib(hosted.window, GLFW_ICONIFIED) == GLFW_TRUE) {
         glfwRestoreWindow(hosted.window);
+    }
+    if (!wasVisible) {
+        activateModalOwner(impl_->state, hosted);
     }
     showHostedWindow(hosted);
     requestFullPaint(hosted);
@@ -338,8 +518,12 @@ bool EuiAppHost::hideWindow(WindowId id) {
     }
 
     HostedWindow& hosted = *iterator->second;
+    const bool wasVisible = hosted.visible;
     hosted.visible = false;
     glfwHideWindow(hosted.window);
+    if (wasVisible) {
+        deactivateModalOwner(impl_->state, hosted, true);
+    }
     if (hosted.renderer) {
         hosted.renderer->makeCurrent();
         hosted.renderer->releaseRenderCache();
@@ -348,6 +532,50 @@ bool EuiAppHost::hideWindow(WindowId id) {
     hosted.runtime.requestFullPaint();
     hosted.paintRequested = false;
     hosted.nextDeadline = std::numeric_limits<double>::infinity();
+    return true;
+}
+
+bool EuiAppHost::setWindowAlwaysOnTop(WindowId id, bool enabled) {
+    const auto iterator = impl_->state.windows.find(id);
+    if (iterator == impl_->state.windows.end() || !iterator->second) {
+        return false;
+    }
+    HostedWindow& hosted = *iterator->second;
+    glfwSetWindowAttrib(hosted.window, GLFW_FLOATING, enabled ? GLFW_TRUE : GLFW_FALSE);
+    hosted.alwaysOnTop = enabled;
+    return glfwGetWindowAttrib(hosted.window, GLFW_FLOATING) ==
+        (enabled ? GLFW_TRUE : GLFW_FALSE);
+}
+
+bool EuiAppHost::setWindowClickThrough(WindowId id, bool enabled) {
+    const auto iterator = impl_->state.windows.find(id);
+    if (iterator == impl_->state.windows.end() || !iterator->second ||
+        (enabled && !iterator->second->borderless)) {
+        return false;
+    }
+    HostedWindow& hosted = *iterator->second;
+    glfwSetWindowAttrib(hosted.window, GLFW_MOUSE_PASSTHROUGH,
+                        enabled ? GLFW_TRUE : GLFW_FALSE);
+    hosted.clickThrough = enabled;
+    return glfwGetWindowAttrib(hosted.window, GLFW_MOUSE_PASSTHROUGH) ==
+        (enabled ? GLFW_TRUE : GLFW_FALSE);
+}
+
+bool EuiAppHost::setWindowPlacement(WindowId id, const WindowPlacement& placement) {
+    const auto iterator = impl_->state.windows.find(id);
+    if (iterator == impl_->state.windows.end() || !iterator->second ||
+        !placement.positioned || !validPlacementBounds(placement)) {
+        return false;
+    }
+    HostedWindow& hosted = *iterator->second;
+    if (!core::window::setWindowPlacement(hosted.window, placement)) {
+        return false;
+    }
+    hosted.maximizeOnFirstShow = !hosted.visible && placement.maximized;
+    requestFullPaint(hosted);
+    hosted.nextDeadline = hosted.visible
+        ? core::window::timeSeconds()
+        : std::numeric_limits<double>::infinity();
     return true;
 }
 
@@ -364,6 +592,8 @@ bool EuiAppHost::destroyWindow(WindowId id) {
         }
     }
 
+    iterator->second->visible = false;
+    deactivateModalOwner(impl_->state, *iterator->second, true);
     destroyHostedWindow(iterator->second);
     impl_->state.windows.erase(iterator);
     return true;
@@ -448,6 +678,9 @@ TickResult EuiAppHost::tick(double nowSeconds, bool updateRequested) {
         const float deltaSeconds = static_cast<float>(std::clamp(
             now - hosted.lastTick, 0.0, 0.25));
         hosted.lastTick = now;
+        const auto modalOwnerIterator = impl_->state.modalOwners.find(hosted.id);
+        const bool inputEnabled = modalOwnerIterator == impl_->state.modalOwners.end() ||
+            modalOwnerIterator->second.visibleModalCount == 0;
 
         if (hosted.runtime.update(hosted.window,
                                   deltaSeconds,
@@ -455,7 +688,8 @@ TickResult EuiAppHost::tick(double nowSeconds, bool updateRequested) {
                                   logicalHeight,
                                   pointerScale,
                                   dpiScale,
-                                  updateRequested)) {
+                                  updateRequested,
+                                  inputEnabled)) {
             hosted.paintRequested = true;
         }
 

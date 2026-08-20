@@ -10,6 +10,7 @@ Handle createWindow(const WindowCreateRequest& request);
 void destroyWindow(Handle window);
 NativeWindowInfo nativeWindowInfo(Handle window);
 bool queryWindowPlacement(Handle window, WindowPlacement& placement);
+bool setWindowPlacement(Handle window, const WindowPlacement& placement);
 #if defined(EUI_WINDOW_BACKEND_SDL2)
 // SDL2 desktop Linux only: returns Xft.dpi / 96 for an X11 window,
 // or 0.0f when SDL selected another video backend.
