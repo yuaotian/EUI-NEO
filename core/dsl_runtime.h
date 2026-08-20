@@ -174,6 +174,17 @@ private:
                            const std::string& hoverTargetId,
                            const RenderTransform& inheritedTransform);
 
+    void updateInputTree(const PointerEvent& event,
+                         float dpiScale,
+                         const std::string& hoverTargetId);
+
+    void updateInputTree(const Element& element,
+                         const PointerEvent& event,
+                         float dpiScale,
+                         const std::string& hoverTargetId,
+                         const RenderTransform& inheritedTransform,
+                         bool ancestorDisabled);
+
     Transform currentElementTransform(const Element& element) const;
 
     TransformMatrix hitMatrixForElement(const Element& element, float dpiScale, const Rect& bounds, const RenderTransform& renderTransform) const;
@@ -218,6 +229,11 @@ private:
                      float dpiScale,
                      const RenderTransform& inheritedTransform,
                      bool snapFrame);
+
+    void updateShaderToyPointer(const Element& element,
+                                const PointerEvent& event,
+                                float dpiScale,
+                                const RenderTransform& inheritedTransform);
 
     void updateShaderToy(const Element& element,
                          const PointerEvent& event,

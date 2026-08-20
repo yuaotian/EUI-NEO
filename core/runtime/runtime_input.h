@@ -471,6 +471,40 @@ inline void Runtime::updateInteraction(
     }
 }
 
+inline void Runtime::updateInputTree(
+    const PointerEvent& event,
+    float dpiScale,
+    const std::string& hoverTargetId) {
+    const RenderTransform identity;
+    for (const Element* root : ui_.orderedRoots()) {
+        updateInputTree(*root, event, dpiScale, hoverTargetId, identity, false);
+    }
+}
+
+inline void Runtime::updateInputTree(
+    const Element& element,
+    const PointerEvent& event,
+    float dpiScale,
+    const std::string& hoverTargetId,
+    const RenderTransform& inheritedTransform,
+    bool ancestorDisabled) {
+    const bool disabledTree = ancestorDisabled || element.disabled;
+    if (disabledTree) {
+        instances_.interaction(element.id).state.update({}, event, false, false);
+    } else {
+        updateInteraction(element, event, dpiScale, hoverTargetId, inheritedTransform);
+    }
+    if (element.kind == ElementKind::Shadertoy) {
+        updateShaderToyPointer(element, event, dpiScale, inheritedTransform);
+    }
+
+    const RenderTransform renderTransform =
+        instances_.renderTransform(element, dpiScale, inheritedTransform);
+    for (const Element* child : element.orderedChildren) {
+        updateInputTree(*child, event, dpiScale, hoverTargetId, renderTransform, disabledTree);
+    }
+}
+
 inline Transform Runtime::currentElementTransform(const Element& element) const {
     if (element.kind == ElementKind::Rect) {
         const auto instance = instances_.rects.find(element.id);

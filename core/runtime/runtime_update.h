@@ -1019,6 +1019,42 @@ inline void Runtime::updateImage(
     animating_ = animating_ || isImageAnimating(instance);
 }
 
+inline void Runtime::updateShaderToyPointer(
+    const Element& element,
+    const PointerEvent& event,
+    float dpiScale,
+    const RenderTransform& inheritedTransform) {
+    runtime::ShaderToyInstance& instance = instances_.shaderToy(element.id);
+    LayoutRect frame = instance.frame.value();
+    if (frame.width <= 0.0f || frame.height <= 0.0f) {
+        frame = element.frame;
+    }
+    const Rect pixelFrame = toPixelRect(frame, dpiScale);
+    const Transform localTransform = scaleTransform(instance.transform.value(), dpiScale);
+    const RenderTransform elementTransform =
+        instances_.renderTransform(element, dpiScale, inheritedTransform);
+    const TransformMatrix matrix =
+        combinedPrimitiveMatrix(elementTransform, pixelFrame, localTransform);
+    TransformMatrix inverse;
+    Vec2 pointerPixels{static_cast<float>(event.x), static_cast<float>(event.y)};
+    const bool invertible = inverseMatrix(matrix, inverse);
+    if (invertible) {
+        pointerPixels = core::transformPoint(inverse, pointerPixels.x, pointerPixels.y);
+    }
+    const Vec2 localPointer{pointerPixels.x - pixelFrame.x, pointerPixels.y - pixelFrame.y};
+    const bool pointerInside = invertible &&
+        localPointer.x >= 0.0f && localPointer.y >= 0.0f &&
+        localPointer.x <= pixelFrame.width && localPointer.y <= pixelFrame.height;
+
+    instance.primitive->setBounds(pixelFrame.x, pixelFrame.y, pixelFrame.width, pixelFrame.height);
+    instance.primitive->updatePointer(localPointer,
+                                      event.down,
+                                      event.pressedThisFrame,
+                                      event.releasedThisFrame,
+                                      pointerInside);
+    paintRequested_ = true;
+}
+
 inline void Runtime::updateShaderToy(
     const Element& element,
     const PointerEvent& event,

@@ -30,6 +30,9 @@ typedef struct EuiImeFilterState {
     double fontHeight;
     BOOL hasCursorRect;
     BOOL applyingCursorRect;
+    double pointerMessageX;
+    double pointerMessageY;
+    BOOL hasPointerMessagePosition;
 } EuiImeFilterState;
 
 static LONG eui_ime_round_long(double value) {
@@ -124,6 +127,16 @@ static LRESULT CALLBACK eui_ime_window_proc(HWND hwnd, UINT message, WPARAM wPar
         // 无激活窗口必须在真实鼠标点击路径上明确拒绝激活。
         return MA_NOACTIVATE;
     }
+    const BOOL pointerButtonMessage = message == WM_LBUTTONDOWN ||
+                                      message == WM_LBUTTONUP ||
+                                      message == WM_RBUTTONDOWN ||
+                                      message == WM_RBUTTONUP;
+    if (state != 0 && pointerButtonMessage) {
+        // GLFW 的按钮回调不携带坐标，先保存当前 native 消息的 lParam 供同步回调读取。
+        state->pointerMessageX = (double)(short)LOWORD(lParam);
+        state->pointerMessageY = (double)(short)HIWORD(lParam);
+        state->hasPointerMessagePosition = TRUE;
+    }
     const BOOL placementChanged = message == WM_IME_COMPOSITION ||
                                   (message == WM_IME_NOTIFY &&
                                    (wParam == IMN_OPENCANDIDATE || wParam == IMN_CHANGECANDIDATE));
@@ -144,6 +157,10 @@ static LRESULT CALLBACK eui_ime_window_proc(HWND hwnd, UINT message, WPARAM wPar
         eui_ime_reapply_cursor_rect(
             hwnd,
             (EuiImeFilterState*)GetPropW(hwnd, EUI_IME_FILTER_PROP));
+    }
+    state = (EuiImeFilterState*)GetPropW(hwnd, EUI_IME_FILTER_PROP);
+    if (state != 0 && pointerButtonMessage) {
+        state->hasPointerMessagePosition = FALSE;
     }
     return result;
 }
@@ -188,6 +205,22 @@ void eui_ime_uninstall_message_filter(GLFWwindow* window) {
     SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)state->previousProc);
     RemovePropW(hwnd, EUI_IME_FILTER_PROP);
     free(state);
+}
+
+int eui_ime_get_pointer_message_position(GLFWwindow* window, double* x, double* y) {
+    if (window == 0 || x == 0 || y == 0) {
+        return 0;
+    }
+    HWND hwnd = glfwGetWin32Window(window);
+    EuiImeFilterState* state = hwnd != 0
+        ? (EuiImeFilterState*)GetPropW(hwnd, EUI_IME_FILTER_PROP)
+        : 0;
+    if (state == 0 || !state->hasPointerMessagePosition) {
+        return 0;
+    }
+    *x = state->pointerMessageX;
+    *y = state->pointerMessageY;
+    return 1;
 }
 
 void eui_ime_set_cursor_rect(GLFWwindow* window, double x, double y, double width, double height) {

@@ -32,6 +32,11 @@ public:
     void setPaused(bool paused);
     void setTimeScale(float scale);
     void requestReset();
+    void updatePointer(const Vec2& localPointer,
+                       bool pointerDown,
+                       bool pressedThisFrame,
+                       bool releasedThisFrame,
+                       bool pointerInside = true);
     void update(float deltaSeconds,
                 const Vec2& localPointer,
                 bool pointerDown,

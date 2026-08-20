@@ -20,6 +20,13 @@ struct InputQueue {
     bool compositionChanged = false;
 };
 
+struct PointerButtonTransition {
+    double x = 0.0;
+    double y = 0.0;
+    int button = 0;
+    bool down = false;
+};
+
 struct PointerState {
     double lastX = 0.0;
     double lastY = 0.0;
@@ -29,10 +36,7 @@ struct PointerState {
     bool lastRightDown = false;
     bool down = false;
     bool rightDown = false;
-    bool pressQueued = false;
-    bool releaseQueued = false;
-    bool rightPressQueued = false;
-    bool rightReleaseQueued = false;
+    std::vector<PointerButtonTransition> buttonTransitions;
     bool hasPosition = false;
     bool inside = false;
 };
@@ -165,29 +169,35 @@ inline void queuePointerButton(window::Handle window,
     state.y = y;
     state.hasPosition = true;
     state.inside = true;
+    state.buttonTransitions.push_back({x, y, button, down});
     if (button == 0) {
-        state.pressQueued = state.pressQueued || down;
-        state.releaseQueued = state.releaseQueued || !down;
         state.down = down;
     } else if (button == 1) {
-        state.rightPressQueued = state.rightPressQueued || down;
-        state.rightReleaseQueued = state.rightReleaseQueued || !down;
         state.rightDown = down;
     }
 }
 
-inline PointerButtonEdges consumePointerButtonEdges(window::Handle window) {
+inline std::vector<detail::PointerButtonTransition> consumePointerButtonTransitions(
+    window::Handle window) {
     detail::PointerState& state = detail::pointerState(window);
-    PointerButtonEdges edges{
-        state.pressQueued,
-        state.releaseQueued,
-        state.rightPressQueued,
-        state.rightReleaseQueued
-    };
-    state.pressQueued = false;
-    state.releaseQueued = false;
-    state.rightPressQueued = false;
-    state.rightReleaseQueued = false;
+    std::vector<detail::PointerButtonTransition> transitions =
+        std::move(state.buttonTransitions);
+    state.buttonTransitions.clear();
+    return transitions;
+}
+
+inline PointerButtonEdges consumePointerButtonEdges(window::Handle window) {
+    PointerButtonEdges edges;
+    for (const detail::PointerButtonTransition& transition :
+         consumePointerButtonTransitions(window)) {
+        if (transition.button == 0) {
+            edges.pressed = edges.pressed || transition.down;
+            edges.released = edges.released || !transition.down;
+        } else if (transition.button == 1) {
+            edges.rightPressed = edges.rightPressed || transition.down;
+            edges.rightReleased = edges.rightReleased || !transition.down;
+        }
+    }
     return edges;
 }
 
@@ -203,10 +213,7 @@ inline void clearPointerInput(window::Handle window) {
     detail::PointerState& state = iterator->second;
     state.down = false;
     state.rightDown = false;
-    state.pressQueued = false;
-    state.releaseQueued = false;
-    state.rightPressQueued = false;
-    state.rightReleaseQueued = false;
+    state.buttonTransitions.clear();
     state.hasPosition = false;
     state.inside = false;
 }
@@ -299,10 +306,7 @@ inline bool hasPendingPointerInput(window::Handle window, float dpiScale = 1.0f)
     y *= dpiScale;
 
     const detail::PointerState& state = stateIt->second;
-    return state.pressQueued ||
-           state.releaseQueued ||
-           state.rightPressQueued ||
-           state.rightReleaseQueued ||
+    return !state.buttonTransitions.empty() ||
            x != state.lastX ||
            y != state.lastY ||
            core::window::isMouseButtonDown(window, 0) != state.lastDown ||
@@ -317,9 +321,10 @@ inline void releaseInputQueue(window::Handle window) {
     detail::compositionTextStates().erase(window);
 }
 
-inline PointerEvent readPointerEvent(window::Handle window, float dpiScale = 1.0f) {
+inline std::vector<PointerEvent> readPointerEvents(window::Handle window, float dpiScale = 1.0f) {
     detail::PointerState& state = detail::pointerState(window);
-    const PointerButtonEdges queuedEdges = consumePointerButtonEdges(window);
+    const std::vector<detail::PointerButtonTransition> transitions =
+        consumePointerButtonTransitions(window);
 
     double x = 0.0;
     double y = 0.0;
@@ -327,23 +332,89 @@ inline PointerEvent readPointerEvent(window::Handle window, float dpiScale = 1.0
     x *= dpiScale;
     y *= dpiScale;
 
-    PointerEvent event;
-    event.x = x;
-    event.y = y;
-    event.deltaX = x - state.lastX;
-    event.deltaY = y - state.lastY;
-    event.down = core::window::isMouseButtonDown(window, 0);
-    event.rightDown = core::window::isMouseButtonDown(window, 1);
-    event.pressedThisFrame = queuedEdges.pressed || (event.down && !state.lastDown);
-    event.releasedThisFrame = queuedEdges.released || (!event.down && state.lastDown);
-    event.rightPressedThisFrame = queuedEdges.rightPressed || (event.rightDown && !state.lastRightDown);
-    event.rightReleasedThisFrame = queuedEdges.rightReleased || (!event.rightDown && state.lastRightDown);
+    const bool backendDown = core::window::isMouseButtonDown(window, 0);
+    const bool backendRightDown = core::window::isMouseButtonDown(window, 1);
+    bool currentDown = state.lastDown;
+    bool currentRightDown = state.lastRightDown;
+    double previousX = state.lastX;
+    double previousY = state.lastY;
+    std::vector<PointerEvent> events;
+    events.reserve(transitions.size() + 2);
+
+    // 每个边沿必须使用消息产生时的坐标，避免消息泵积压后按最终光标位置误判点击。
+    for (const detail::PointerButtonTransition& transition : transitions) {
+        const double transitionX = transition.x * dpiScale;
+        const double transitionY = transition.y * dpiScale;
+        if (!transition.down &&
+            (currentDown || currentRightDown) &&
+            (transitionX != previousX || transitionY != previousY)) {
+            // 释放前先兑现仍按下状态下的最后位移，确保 slider/drag 收到终点。
+            PointerEvent motionEvent;
+            motionEvent.x = transitionX;
+            motionEvent.y = transitionY;
+            motionEvent.deltaX = transitionX - previousX;
+            motionEvent.deltaY = transitionY - previousY;
+            motionEvent.down = currentDown;
+            motionEvent.rightDown = currentRightDown;
+            events.push_back(motionEvent);
+            previousX = transitionX;
+            previousY = transitionY;
+        }
+
+        PointerEvent event;
+        event.x = transitionX;
+        event.y = transitionY;
+        event.deltaX = event.x - previousX;
+        event.deltaY = event.y - previousY;
+        if (transition.button == 0) {
+            currentDown = transition.down;
+            event.pressedThisFrame = transition.down;
+            event.releasedThisFrame = !transition.down;
+        } else if (transition.button == 1) {
+            currentRightDown = transition.down;
+            event.rightPressedThisFrame = transition.down;
+            event.rightReleasedThisFrame = !transition.down;
+        }
+        event.down = currentDown;
+        event.rightDown = currentRightDown;
+        events.push_back(event);
+        previousX = event.x;
+        previousY = event.y;
+    }
+
+    // 回调之外仍保留轮询差分，覆盖平台未生成按钮回调的降级路径。
+    if (backendDown != currentDown || backendRightDown != currentRightDown) {
+        PointerEvent event;
+        event.x = x;
+        event.y = y;
+        event.deltaX = x - previousX;
+        event.deltaY = y - previousY;
+        event.down = backendDown;
+        event.rightDown = backendRightDown;
+        event.pressedThisFrame = backendDown && !currentDown;
+        event.releasedThisFrame = !backendDown && currentDown;
+        event.rightPressedThisFrame = backendRightDown && !currentRightDown;
+        event.rightReleasedThisFrame = !backendRightDown && currentRightDown;
+        events.push_back(event);
+        previousX = x;
+        previousY = y;
+    }
+
+    // 始终追加最终无边沿状态，确保 release 解除 capture 后立即刷新真实 hover。
+    PointerEvent finalEvent;
+    finalEvent.x = x;
+    finalEvent.y = y;
+    finalEvent.deltaX = x - previousX;
+    finalEvent.deltaY = y - previousY;
+    finalEvent.down = backendDown;
+    finalEvent.rightDown = backendRightDown;
+    events.push_back(finalEvent);
 
     state.lastX = x;
     state.lastY = y;
-    state.lastDown = event.down;
-    state.lastRightDown = event.rightDown;
-    return event;
+    state.lastDown = backendDown;
+    state.lastRightDown = backendRightDown;
+    return events;
 }
 
 } // namespace core

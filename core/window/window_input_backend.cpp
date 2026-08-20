@@ -92,6 +92,19 @@ bool isMouseButtonDown(Handle window, int button) {
 
 namespace core::window {
 
+namespace {
+
+void pointerMessagePosition(GLFWwindow* window, double& x, double& y) {
+#if defined(_WIN32)
+    if (eui_ime_get_pointer_message_position(window, &x, &y) != 0) {
+        return;
+    }
+#endif
+    glfwGetCursorPos(window, &x, &y);
+}
+
+} // namespace
+
 void getCursorPosition(Handle window, double& x, double& y) {
     glfwGetCursorPos(static_cast<GLFWwindow*>(window), &x, &y);
 }
@@ -115,7 +128,8 @@ void installInputCallbacks(Handle window) {
         }
         double x = 0.0;
         double y = 0.0;
-        glfwGetCursorPos(currentWindow, &x, &y);
+        // Windows 消息位置代表事件入队时坐标，不能用分派时已移动的实体光标覆盖。
+        pointerMessagePosition(currentWindow, x, y);
         core::queuePointerButton(currentWindow,
                                  x,
                                  y,

@@ -166,6 +166,17 @@ void pointerRegionAndCaptureSemantics() {
     primitive.update(0.1f, {30.0f, 15.0f}, false, false, false, 5, true);
     assert(near(primitive.frameData().mouse[0], 30.0f));
     assert(near(primitive.frameData().mouse[1], 35.0f));
+
+    core::ShaderToyPrimitive queued;
+    queued.setBounds(0.0f, 0.0f, 100.0f, 50.0f);
+    queued.updatePointer({25.0f, 12.0f}, true, true, false, true);
+    assert(near(queued.frameData().mouse[2], 25.0f));
+    assert(near(queued.frameData().mouse[3], 38.0f));
+    queued.updatePointer({140.0f, 80.0f}, false, false, true, false);
+    assert(queued.frameData().mouse[2] < 0.0f && queued.frameData().mouse[3] < 0.0f);
+    queued.update(0.1f, {140.0f, 80.0f}, false, false, false, 1, false);
+    assert(near(queued.frameData().time, 0.1f));
+    assert(queued.frameData().mouse[2] < 0.0f && queued.frameData().mouse[3] < 0.0f);
 }
 void pauseResetAndResourceSemantics() {
     FakeBackend backend;

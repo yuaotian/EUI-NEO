@@ -10,6 +10,9 @@ void eui_ime_set_cursor_rect(struct GLFWwindow* window, double x, double y, doub
 void eui_ime_set_cursor_rect_with_font(struct GLFWwindow* window, double x, double y, double width, double height, double fontHeight);
 void eui_ime_install_message_filter(struct GLFWwindow* window);
 void eui_ime_uninstall_message_filter(struct GLFWwindow* window);
+#if defined(_WIN32)
+int eui_ime_get_pointer_message_position(struct GLFWwindow* window, double* x, double* y);
+#endif
 int eui_ime_is_composing(struct GLFWwindow* window);
 int eui_ime_get_composition_string_utf8(struct GLFWwindow* window, char* buffer, int bufferSize);
 void eui_ime_clear_composition(struct GLFWwindow* window);

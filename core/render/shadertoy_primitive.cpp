@@ -151,28 +151,11 @@ void ShaderToyPrimitive::requestReset() {
     impl_->resetTargets(true);
 }
 
-void ShaderToyPrimitive::update(float deltaSeconds,
-                                const Vec2& localPointer,
-                                bool pointerDown,
-                                bool pressedThisFrame,
-                                bool releasedThisFrame,
-                                std::uint64_t frameToken,
-                                bool pointerInside) {
-    if (frameToken == impl_->lastUpdateToken) {
-        return;
-    }
-    impl_->lastUpdateToken = frameToken;
-    const float scaledDelta = impl_->paused ? 0.0f : std::max(0.0f, deltaSeconds) * impl_->timeScale;
-    impl_->frame.deltaTime = scaledDelta;
-    impl_->frame.time += scaledDelta;
-    impl_->frame.frameRate = scaledDelta > 0.0f ? 1.0f / scaledDelta : 0.0f;
-    if (!impl_->paused && impl_->frameRendered) {
-        ++impl_->frame.frame;
-    }
-    impl_->frame.date = localDate();
-    impl_->frame.channelTime.fill(impl_->frame.time);
-    impl_->frame.frameToken = frameToken;
-
+void ShaderToyPrimitive::updatePointer(const Vec2& localPointer,
+                                       bool pointerDown,
+                                       bool pressedThisFrame,
+                                       bool releasedThisFrame,
+                                       bool pointerInside) {
     const Vec2 bottomLeft{
         std::clamp(localPointer.x, 0.0f, impl_->boundsValue.width),
         std::clamp(impl_->boundsValue.height - localPointer.y, 0.0f, impl_->boundsValue.height)
@@ -200,6 +183,35 @@ void ShaderToyPrimitive::update(float deltaSeconds,
     if (capturedRelease || (!pointerDown && impl_->pointerCaptured)) {
         impl_->pointerCaptured = false;
     }
+}
+
+void ShaderToyPrimitive::update(float deltaSeconds,
+                                const Vec2& localPointer,
+                                bool pointerDown,
+                                bool pressedThisFrame,
+                                bool releasedThisFrame,
+                                std::uint64_t frameToken,
+                                bool pointerInside) {
+    if (frameToken == impl_->lastUpdateToken) {
+        return;
+    }
+    impl_->lastUpdateToken = frameToken;
+    const float scaledDelta = impl_->paused ? 0.0f : std::max(0.0f, deltaSeconds) * impl_->timeScale;
+    impl_->frame.deltaTime = scaledDelta;
+    impl_->frame.time += scaledDelta;
+    impl_->frame.frameRate = scaledDelta > 0.0f ? 1.0f / scaledDelta : 0.0f;
+    if (!impl_->paused && impl_->frameRendered) {
+        ++impl_->frame.frame;
+    }
+    impl_->frame.date = localDate();
+    impl_->frame.channelTime.fill(impl_->frame.time);
+    impl_->frame.frameToken = frameToken;
+
+    updatePointer(localPointer,
+                  pointerDown,
+                  pressedThisFrame,
+                  releasedThisFrame,
+                  pointerInside);
 }
 
 bool ShaderToyPrimitive::isAnimating() const { return !impl_->paused; }

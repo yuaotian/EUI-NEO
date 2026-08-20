@@ -22,6 +22,15 @@ int main() {
     assert(!consumed.pressed);
     assert(!consumed.released);
 
+    core::queuePointerButton(first, 18.0, 28.0, 0, true);
+    core::queuePointerButton(first, 78.0, 88.0, 0, false);
+    const auto orderedTransitions = core::consumePointerButtonTransitions(first);
+    assert(orderedTransitions.size() == 2);
+    assert(orderedTransitions[0].down && orderedTransitions[0].x == 18.0 &&
+           orderedTransitions[0].y == 28.0);
+    assert(!orderedTransitions[1].down && orderedTransitions[1].x == 78.0 &&
+           orderedTransitions[1].y == 88.0);
+
     core::queuePointerButton(second, 30.0, 40.0, 1, true);
     const core::PointerButtonEdges isolatedFirst = core::consumePointerButtonEdges(first);
     const core::PointerButtonEdges secondEdges = core::consumePointerButtonEdges(second);
@@ -47,6 +56,52 @@ int main() {
     assert(click.released);
     assert(!click.pressed);
     assert(!click.active);
+
+    core::InteractionState movedAfterClick;
+    core::PointerEvent movedPress;
+    movedPress.x = 20.0;
+    movedPress.y = 20.0;
+    movedPress.down = true;
+    movedPress.pressedThisFrame = true;
+    movedAfterClick.update(bounds, movedPress, true);
+    core::PointerEvent movedRelease = movedPress;
+    movedRelease.down = false;
+    movedRelease.pressedThisFrame = false;
+    movedRelease.releasedThisFrame = true;
+    movedAfterClick.update(bounds, movedRelease, true);
+    assert(movedAfterClick.clicked);
+    core::PointerEvent finalOutside;
+    finalOutside.x = 140.0;
+    finalOutside.y = 140.0;
+    movedAfterClick.update(bounds, finalOutside, false);
+    assert(!movedAfterClick.hover);
+
+    core::InteractionState outsideClick;
+    core::PointerEvent outsidePress;
+    outsidePress.x = 140.0;
+    outsidePress.y = 140.0;
+    outsidePress.down = true;
+    outsidePress.pressedThisFrame = true;
+    outsideClick.update(bounds, outsidePress, false);
+    core::PointerEvent outsideRelease = outsidePress;
+    outsideRelease.down = false;
+    outsideRelease.pressedThisFrame = false;
+    outsideRelease.releasedThisFrame = true;
+    outsideClick.update(bounds, outsideRelease, false);
+    assert(!outsideClick.clicked);
+    core::PointerEvent finalInside;
+    finalInside.x = 20.0;
+    finalInside.y = 20.0;
+    outsideClick.update(bounds, finalInside, true);
+    assert(outsideClick.hover);
+
+    core::InteractionState releaseOutside;
+    releaseOutside.update(bounds, movedPress, true);
+    core::PointerEvent outsideReleaseAfterPress = finalOutside;
+    outsideReleaseAfterPress.releasedThisFrame = true;
+    releaseOutside.update(bounds, outsideReleaseAfterPress, true);
+    assert(releaseOutside.released);
+    assert(!releaseOutside.clicked);
 
     core::InteractionState drag;
     core::PointerEvent press;
