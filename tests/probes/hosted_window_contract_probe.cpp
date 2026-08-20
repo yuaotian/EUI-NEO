@@ -399,6 +399,10 @@ int main() {
     pumpMessages();
     HWND externalFocusHwnd = createExternalFocusProbe();
     expect(activateExternalFocusProbe(externalFocusHwnd), "切换到 host 外部 probe HWND");
+    SendMessageW(toolHwnd, WM_CLOSE, 0, 0);
+    pumpMessages();
+    expect(!host.shouldClose(toolId) && GetForegroundWindow() == externalFocusHwnd,
+           "外部前台时 modal owner close 被取消且不抢前台");
     expect(!host.hideWindow(toolId) && GetForegroundWindow() == externalFocusHwnd,
            "外部前台时拒绝隐藏 modal owner 且不抢前台");
     expect(host.hideWindow(externalFocusDialogId), "外部前台时隐藏 modal Dialog");
@@ -424,6 +428,19 @@ int main() {
     expect(IsWindowVisible(popupHwnd) != FALSE &&
                GetForegroundWindow() == foregroundBeforePopupShow,
            "Popup show 不抢前台");
+    ShowWindow(popupHwnd, SW_MINIMIZE);
+    pumpMessages();
+    expect(IsIconic(popupHwnd) != FALSE &&
+               hasWindowAttribute(host, popupId, GLFW_ICONIFIED),
+           "外部路径最小化 no-activate Popup");
+    const HWND foregroundBeforePopupRestore = GetForegroundWindow();
+    expect(host.showWindow(popupId), "恢复已最小化 no-activate Popup");
+    pumpMessages();
+    expect(IsIconic(popupHwnd) == FALSE &&
+               !hasWindowAttribute(host, popupId, GLFW_ICONIFIED) &&
+               GetForegroundWindow() == foregroundBeforePopupRestore &&
+               GetForegroundWindow() != popupHwnd,
+           "no-activate Popup 恢复 normal placement 且不抢前台");
     const eui::WindowPlacement movedPopup{true, 460, 330, 390, 250, false};
     expect(host.setWindowPlacement(popupId, movedPopup), "动态设置 Popup bounds");
     const auto movedPopupPlacement = host.windowPlacement(popupId);

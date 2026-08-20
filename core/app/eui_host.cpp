@@ -319,7 +319,9 @@ void installWindowCallbacks(HostedWindow& hosted) {
                 HostedWindow* modal = newestVisibleModalChild(*hosted->hostState, hosted->id);
                 if (modal != nullptr) {
                     glfwSetWindowShouldClose(current, GLFW_FALSE);
-                    focusHostedWindow(modal);
+                    if (foregroundBelongsToHostedSubtree(*hosted->hostState, hosted->id)) {
+                        focusHostedWindow(modal);
+                    }
                     return;
                 }
             }
@@ -533,11 +535,30 @@ bool EuiAppHost::showWindow(WindowId id) {
 
     HostedWindow& hosted = *iterator->second;
     const bool wasVisible = hosted.visible;
+    const bool iconified = glfwGetWindowAttrib(hosted.window, GLFW_ICONIFIED) == GLFW_TRUE;
+#if defined(_WIN32)
+    HWND noActivateHwnd = nullptr;
+    if (iconified && hosted.noActivate) {
+        noActivateHwnd = nativeHwnd(hosted);
+        if (noActivateHwnd == nullptr) {
+            return false;
+        }
+    }
+#endif
     hosted.visible = true;
     hosted.closeRequested = false;
     glfwSetWindowShouldClose(hosted.window, GLFW_FALSE);
-    if (glfwGetWindowAttrib(hosted.window, GLFW_ICONIFIED) == GLFW_TRUE) {
+    if (iconified) {
+#if defined(_WIN32)
+        if (hosted.noActivate) {
+            // GLFW 的普通 restore 使用 SW_RESTORE；noActivate 窗口必须恢复而不激活。
+            ShowWindow(noActivateHwnd, SW_SHOWNOACTIVATE);
+        } else {
+            glfwRestoreWindow(hosted.window);
+        }
+#else
         glfwRestoreWindow(hosted.window);
+#endif
     }
     if (!wasVisible) {
         activateModalOwner(impl_->state, hosted);
