@@ -1,5 +1,6 @@
 #pragma once
 
+#include "components/focus_ring.h"
 #include "components/theme.h"
 #include "core/dsl.h"
 
@@ -58,11 +59,14 @@ public:
     ButtonBuilder& theme(const theme::ThemeColorTokens& tokens, bool primary = true) {
         style_ = ButtonStyle(tokens, primary);
         metrics_ = tokens.metrics;
+        focusColor_ = tokens.primary;
+        focusLineWidth_ = theme::fieldVisuals(tokens).focusLineHeight;
         return *this;
     }
     ButtonBuilder& radius(float value) { style_.radius = value; return *this; }
     ButtonBuilder& opacity(float value) { style_.opacity = std::clamp(value, 0.0f, 1.0f); return *this; }
     ButtonBuilder& disabled(bool value = true) { disabled_ = value; return *this; }
+    ButtonBuilder& initialFocus(bool value = true) { initialFocus_ = value; return *this; }
     ButtonBuilder& preserveFocusOnPress(bool value = true) { preserveFocusOnPress_ = value; return *this; }
     ButtonBuilder& translate(float x, float y) { translateX_ = x; translateY_ = y; return *this; }
     ButtonBuilder& translateX(float value) { translateX_ = value; return *this; }
@@ -119,6 +123,10 @@ public:
         iconColor.a *= style_.opacity;
         const std::function<void()> onPress = onPress_;
         const std::function<void()> onRelease = onRelease_;
+        // 鼠标点击与键盘激活共用同一动作，确保两条输入路径行为一致。
+        const std::function<void()> action = onClick_;
+        const std::string focusId = id_ + ".bg";
+        const bool focused = ui_.isFocused(focusId);
 
         auto root = ui_.stack(id_)
             .size(w, h)
@@ -141,7 +149,9 @@ public:
                     .transition(transition_)
                     .disabled(disabled_)
                     .preserveFocusOnPress(preserveFocusOnPress_)
-                    .onClick(onClick_)
+                    .onClick(action)
+                    .onActivate(action)
+                    .initialFocus(initialFocus_)
                     .onContextMenu(onContextMenu_);
                 if (onPress) {
                     bg.onPress([onPress](const core::PointerEvent&, const core::Rect&) { onPress(); });
@@ -153,6 +163,15 @@ public:
                     bg.onFrame(onFrame_);
                 }
                 bg.build();
+
+                detail::focusRing(ui_,
+                                  id_ + ".focus",
+                                  {0.0f, 0.0f, w, h},
+                                  style_.radius * scale_,
+                                  focusColor_,
+                                  focusLineWidth_ * scale_,
+                                  focused && !disabled_,
+                                  transition_);
 
                 ui_.row(id_ + ".content")
                     .size(w, h)
@@ -214,9 +233,12 @@ private:
     float x_ = 0.0f;
     float y_ = 0.0f;
     bool disabled_ = false;
+    bool initialFocus_ = false;
     bool preserveFocusOnPress_ = false;
     bool hasX_ = false;
     bool hasY_ = false;
+    core::Color focusColor_ = theme::dark().primary;
+    float focusLineWidth_ = theme::fieldVisuals(theme::dark()).focusLineHeight;
 };
 
 inline ButtonBuilder button(core::dsl::Ui& ui, const std::string& id) {

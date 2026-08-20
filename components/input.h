@@ -1,5 +1,6 @@
 #pragma once
 
+#include "components/focus_ring.h"
 #include "components/theme.h"
 #include "components/input_model.h"
 #include "core/dsl.h"
@@ -26,6 +27,7 @@ struct InputStyle {
         cursor = tokens.primary;
         shadow = theme::popupShadow(tokens);
         radius = tokens.metrics.radius.popup;
+        focusLineWidth = theme::fieldVisuals(tokens).focusLineHeight;
     }
 
     core::Color background;
@@ -37,6 +39,7 @@ struct InputStyle {
     core::Color cursor;
     core::Shadow shadow;
     float radius = 10.0f;
+    float focusLineWidth = 2.0f;
 };
 
 class InputBuilder {
@@ -56,6 +59,7 @@ public:
     }
     InputBuilder& placeholder(std::string value) { placeholder_ = std::move(value); return *this; }
     InputBuilder& multiline(bool value = true) { multiline_ = value; return *this; }
+    InputBuilder& disabled(bool value = true) { disabled_ = value; return *this; }
     InputBuilder& fontSize(float value) { fontSize_ = std::max(1.0f, value); return *this; }
     InputBuilder& fontFamily(std::string value) { fontFamily_ = std::move(value); return *this; }
     InputBuilder& inset(float value) { inset_ = std::max(0.0f, value); return *this; }
@@ -78,6 +82,10 @@ public:
         onEnter_ = std::move(callback);
         return *this;
     }
+    InputBuilder& onEscape(std::function<void()> callback) {
+        onEscape_ = std::move(callback);
+        return *this;
+    }
     InputBuilder& onFocus(std::function<void(bool)> callback) {
         onFocus_ = std::move(callback);
         return *this;
@@ -92,6 +100,7 @@ public:
         const bool allowMultiline = multiline_;
         const std::function<void(const std::string&)> onChange = onChange_;
         const std::function<void()> onEnter = onEnter_;
+        const std::function<void()> onEscape = onEscape_;
         const std::function<void(bool)> onFocus = onFocus_;
         const float textLineHeight = fontSize * 1.2f;
         const float textY = multiline_ ? inset : std::max(0.0f, (height_ - textLineHeight) * 0.5f);
@@ -146,6 +155,7 @@ public:
         auto root = ui_.stack(id_)
             .size(width_, height_)
             .clip()
+            .disabled(disabled_)
             .dirtyKey(InputModel::makeDirtyKey(state, focused, layout));
         if (hasX_) {
             root.x(x_);
@@ -158,7 +168,7 @@ public:
                     .size(width_, height_)
                     .color(style_.background)
                     .radius(style_.radius)
-                    .border(1.0f, focused ? style_.focusBorder : style_.border)
+                    .border(1.0f, style_.border)
                     .shadow(focused ? style_.shadow : core::Shadow{})
                     .transition(transition_)
                     .focusable()
@@ -193,7 +203,7 @@ public:
                             layout.maxVerticalScroll);
                     });
                 }
-                hit.onTextInput([&state, allowMultiline, onChange, onEnter, width, inset, fontSize, fontFamily, textHeight](const core::KeyboardEvent& event) {
+                hit.onTextInput([&state, allowMultiline, onChange, onEnter, onEscape, width, inset, fontSize, fontFamily, textHeight](const core::KeyboardEvent& event) {
                         state.followCaret = true;
                         bool changed = false;
                         const std::string nextComposition = event.composing ? InputModel::filteredText(event.compositionText, allowMultiline) : std::string{};
@@ -322,7 +332,10 @@ public:
                             InputModel::insertAtCursor(state, InputModel::filteredText(event.pasteText, allowMultiline));
                             changed = true;
                         }
-                        if (event.hasKey(core::InputKey::Enter)) {
+                        const core::KeyEvent* enterKey = event.findKey(core::InputKey::Enter);
+                        // 单行回车只响应首次按下；多行允许按键重复插入换行。
+                        if (enterKey != nullptr && !event.composing &&
+                            (allowMultiline || enterKey->action == core::KeyAction::Press)) {
                             if (allowMultiline) {
                                 InputModel::pushUndoState(state);
                                 InputModel::insertAtCursor(state, "\n");
@@ -331,8 +344,11 @@ public:
                                 onEnter();
                             }
                         }
-                        if (event.hasKey(core::InputKey::Escape) && onEnter) {
-                            onEnter();
+                        const core::KeyEvent* escapeKey = event.findKey(core::InputKey::Escape);
+                        // 输入法组合期间 Escape 仅交给输入法处理，避免误触组件回调。
+                        if (escapeKey != nullptr && !event.composing &&
+                            escapeKey->action == core::KeyAction::Press && onEscape) {
+                            onEscape();
                         }
                         if (allowMultiline) {
                             state.horizontalScroll = 0.0f;
@@ -344,6 +360,15 @@ public:
                         }
                     })
                     .build();
+
+                detail::focusRing(ui_,
+                                  id_ + ".focus",
+                                  {0.0f, 0.0f, width_, height_},
+                                  style_.radius,
+                                  style_.focusBorder,
+                                  style_.focusLineWidth,
+                                  focused && !disabled_,
+                                  transition_);
 
                 ui_.stack(id_ + ".textViewport")
                     .position(inset, textY)
@@ -447,10 +472,12 @@ private:
     core::Transition transition_ = core::Transition::make(0.16f, core::Ease::OutCubic);
     std::function<void(const std::string&)> onChange_;
     std::function<void()> onEnter_;
+    std::function<void()> onEscape_;
     std::function<void(bool)> onFocus_;
     std::string text_;
     std::string placeholder_ = "Hello EUI-NEO 😉";
     bool multiline_ = false;
+    bool disabled_ = false;
     float width_ = 260.0f;
     float height_ = 44.0f;
     float x_ = 0.0f;

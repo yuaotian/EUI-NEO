@@ -164,6 +164,7 @@ private:
 
     // 键盘焦点按 compose/document DFS 顺序遍历；z-index 只影响绘制，不改变键盘顺序。
     std::vector<std::string> focusableIds() const;
+    std::vector<std::string> focusableIds(const std::string& scopeId) const;
     bool focusNext(bool reverse = false);
     // 分发单个离散按键；Tab 负责焦点移动，Enter/Space 在 Press 边沿触发 onActivate。
     bool dispatchKey(const KeyEvent& event);
@@ -173,6 +174,14 @@ private:
                              bool ancestorDisabled,
                              bool ancestorVisible,
                              std::vector<std::string>& ids) const;
+    void collectFocusScopeIds(const Element& element,
+                              bool ancestorDisabled,
+                              bool ancestorVisible,
+                              std::vector<std::string>& ids) const;
+    std::string initialFocusId(const std::string& scopeId) const;
+    void syncFocusScopes();
+    void pruneFocusScopeStates(const std::vector<std::string>& visibleScopeIds);
+    bool dispatchEscape(const KeyEvent& event, bool composing);
 
     void updateScroll(const ScrollEvent& event, const std::string& targetId);
 
@@ -299,6 +308,8 @@ private:
     bool paintRequested_ = true;
     bool animating_ = false;
     bool composeRequested_ = false;
+    // compose 末尾的 scope 同步可能改变焦点，需要保留到宿主的同帧二次组合。
+    bool focusRecomposeRequested_ = false;
     bool fullPaintRequested_ = true;
     bool wantsHandCursor_ = false;
     bool fullTreeUpdateRequested_ = true;
@@ -309,6 +320,13 @@ private:
     float hoverTargetCacheDpiScale_ = 0.0f;
     std::string hoverTargetCacheId_;
     std::string focusedId_;
+    struct FocusScopeState {
+        std::string restoreId;
+        std::string parentScopeId;
+    };
+    std::unordered_map<std::string, FocusScopeState> focusScopeStates_;
+    std::vector<std::string> activeFocusScopeIds_;
+    std::string activeFocusScopeId_;
     RenderTransform focusedElementRenderTransform_;
     bool focusedElementRenderTransformValid_ = false;
     float logicalWidth_ = 0.0f;

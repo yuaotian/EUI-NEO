@@ -1,5 +1,6 @@
 #pragma once
 
+#include "components/focus_ring.h"
 #include "components/theme.h"
 #include "core/dsl.h"
 #include "core/render/text.h"
@@ -12,6 +13,14 @@
 #include <vector>
 
 namespace components {
+
+namespace detail {
+struct CheckboxToggleState {
+    bool observed = false;
+    bool value = false;
+    bool initialized = false;
+};
+}
 
 struct CheckboxStyle {
     CheckboxStyle() : CheckboxStyle(theme::dark()) {}
@@ -60,10 +69,13 @@ public:
     CheckboxBuilder& text(std::string value) { text_ = std::move(value); return *this; }
     CheckboxBuilder& fontSize(float value) { fontSize_ = std::max(1.0f, value); return *this; }
     CheckboxBuilder& boxSize(float value) { boxSize_ = std::max(10.0f, value); return *this; }
+    CheckboxBuilder& disabled(bool value = true) { disabled_ = value; return *this; }
     CheckboxBuilder& style(const CheckboxStyle& value) { style_ = value; return *this; }
     CheckboxBuilder& theme(const theme::ThemeColorTokens& tokens) {
         style_ = CheckboxStyle(tokens);
         metrics_ = tokens.metrics;
+        focusColor_ = tokens.primary;
+        focusLineWidth_ = theme::fieldVisuals(tokens).focusLineHeight;
         return *this;
     }
     CheckboxBuilder& transition(const core::Transition& value) { transition_ = value; return *this; }
@@ -124,23 +136,45 @@ public:
         const core::Color idle = checked_ ? style_.checked : style_.box;
         const core::Color hover = checked_ ? style_.checkedHover : style_.boxHover;
         const core::Color pressed = checked_ ? style_.checkedPressed : style_.boxPressed;
-        const bool nextChecked = !checked_;
         const std::function<void(bool)> onChange = onChange_;
+        // 鼠标与同一帧内的连续键盘激活共用累积状态，保证逐次切换。
+        auto& toggle = ui_.state<detail::CheckboxToggleState>(id_ + ".toggle");
+        if (!toggle.initialized || toggle.observed != checked_) {
+            toggle.observed = checked_;
+            toggle.value = checked_;
+            toggle.initialized = true;
+        }
+        const std::function<void()> action = [onChange, &toggle] {
+            toggle.value = !toggle.value;
+            toggle.observed = toggle.value;
+            if (onChange) {
+                onChange(toggle.value);
+            }
+        };
+        const std::string focusId = id_ + ".hit";
+        const bool focused = ui_.isFocused(focusId);
 
         ui_.stack(id_)
             .size(width_, height_)
+            .disabled(disabled_)
             .content([&] {
                 ui_.rect(id_ + ".hit")
                     .size(hitWidth, height_)
                     .states(theme::color(0.0f, 0.0f, 0.0f, 0.0f), style_.rowHover, style_.rowPressed)
                     .radius(std::max(metrics_.radius.small, height_ * 0.20f))
                     .transition(transition_)
-                    .onClick([onChange, nextChecked] {
-                        if (onChange) {
-                            onChange(nextChecked);
-                        }
-                    })
+                    .onClick(action)
+                    .onActivate(action)
                     .build();
+
+                detail::focusRing(ui_,
+                                  id_ + ".focus",
+                                  {0.0f, 0.0f, hitWidth, height_},
+                                  std::max(metrics_.radius.small, height_ * 0.20f),
+                                  focusColor_,
+                                  focusLineWidth_,
+                                  focused && !disabled_,
+                                  transition_);
 
                 ui_.rect(id_ + ".box")
                     .x(contentX)
@@ -208,11 +242,14 @@ private:
     std::function<void(bool)> onChange_;
     std::string text_;
     bool checked_ = false;
+    bool disabled_ = false;
     float width_ = 180.0f;
     float height_ = 30.0f;
     float boxSize_ = 0.0f;
     float gap_ = 0.0f;
     float fontSize_ = 0.0f;
+    core::Color focusColor_ = theme::dark().primary;
+    float focusLineWidth_ = theme::fieldVisuals(theme::dark()).focusLineHeight;
 };
 
 inline CheckboxBuilder checkbox(core::dsl::Ui& ui, const std::string& id) {

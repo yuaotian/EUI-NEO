@@ -79,9 +79,9 @@ public:
             changed = true;
         }
 
-        if (runtime_.composeRequested()) {
-            // A compose can change retained content without changing the element structure.
-            // Rebuild the complete cache so state-driven text is visible immediately.
+        // 第一遍额外组合落业务状态，scope 若在末尾改变焦点，再用第二遍刷新焦点视觉。
+        constexpr int kMaxAdditionalComposePasses = 2;
+        for (int pass = 0; pass < kMaxAdditionalComposePasses && runtime_.composeRequested(); ++pass) {
             runtime_.requestFullPaint();
             composeFrame();
             if (runtime_.update(window, 0.0f, pointerScale, effectiveScale, inputEnabled)) {

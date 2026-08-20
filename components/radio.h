@@ -1,5 +1,6 @@
 #pragma once
 
+#include "components/focus_ring.h"
 #include "components/theme.h"
 #include "core/dsl.h"
 #include "core/render/text.h"
@@ -49,10 +50,15 @@ public:
     RadioBuilder& text(std::string value) { text_ = std::move(value); return *this; }
     RadioBuilder& fontSize(float value) { fontSize_ = std::max(1.0f, value); return *this; }
     RadioBuilder& dotSize(float value) { dotSize_ = std::max(10.0f, value); return *this; }
+    RadioBuilder& disabled(bool value = true) { disabled_ = value; return *this; }
+    RadioBuilder& keyboardFocus(bool value = true) { keyboardFocus_ = value; return *this; }
+    RadioBuilder& focusTarget(std::string id) { focusTarget_ = std::move(id); return *this; }
     RadioBuilder& style(const RadioStyle& value) { style_ = value; return *this; }
     RadioBuilder& theme(const theme::ThemeColorTokens& tokens) {
         style_ = RadioStyle(tokens);
         metrics_ = tokens.metrics;
+        focusColor_ = tokens.primary;
+        focusLineWidth_ = theme::fieldVisuals(tokens).focusLineHeight;
         return *this;
     }
     RadioBuilder& transition(const core::Transition& value) { transition_ = value; return *this; }
@@ -84,21 +90,41 @@ public:
         dotTransition.durationSeconds = selected_ ? 0.16f : 0.10f;
         dotTransition.ease = core::Ease::OutCubic;
         const std::function<void(bool)> onChange = onChange_;
+        // 独立单选项的鼠标点击与键盘激活共用同一选择动作。
+        const std::function<void()> action = [onChange] {
+            if (onChange) {
+                onChange(true);
+            }
+        };
+        const std::string focusId = id_ + ".hit";
+        const bool focused = keyboardFocus_ && ui_.isFocused(focusId);
 
         ui_.stack(id_)
             .size(width_, height_)
+            .disabled(disabled_)
             .content([&] {
-                ui_.rect(id_ + ".hit")
+                auto hit = ui_.rect(id_ + ".hit")
                     .size(hitWidth, height_)
                     .states(theme::color(0.0f, 0.0f, 0.0f, 0.0f), style_.rowHover, style_.rowPressed)
                     .radius(std::max(metrics_.radius.small, height_ * 0.20f))
                     .transition(transition_)
-                    .onClick([onChange] {
-                        if (onChange) {
-                            onChange(true);
-                        }
-                    })
-                    .build();
+                    .onClick(action);
+                if (keyboardFocus_) {
+                    hit.onActivate(action);
+                }
+                if (!focusTarget_.empty()) {
+                    hit.focusTarget(focusTarget_);
+                }
+                hit.build();
+
+                detail::focusRing(ui_,
+                                  id_ + ".focus",
+                                  {0.0f, 0.0f, hitWidth, height_},
+                                  std::max(metrics_.radius.small, height_ * 0.20f),
+                                  focusColor_,
+                                  focusLineWidth_,
+                                  focused && !disabled_,
+                                  transition_);
 
                 ui_.rect(id_ + ".outer")
                     .x(contentX)
@@ -151,11 +177,16 @@ private:
     std::function<void(bool)> onChange_;
     std::string text_;
     bool selected_ = false;
+    bool disabled_ = false;
+    bool keyboardFocus_ = true;
+    std::string focusTarget_;
     float width_ = 180.0f;
     float height_ = 30.0f;
     float dotSize_ = 0.0f;
     float gap_ = 0.0f;
     float fontSize_ = 0.0f;
+    core::Color focusColor_ = theme::dark().primary;
+    float focusLineWidth_ = theme::fieldVisuals(theme::dark()).focusLineHeight;
 };
 
 inline RadioBuilder radio(core::dsl::Ui& ui, const std::string& id) {

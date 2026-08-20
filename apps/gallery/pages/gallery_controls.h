@@ -230,24 +230,17 @@ struct GalleryControlsPage {
                 })
                 .build();
 
-            ui.column("controls.radios")
+            // 保留原控件区高度，避免窄布局切换到 RadioGroup 后压缩后续内容间距。
+            ui.stack("controls.radios.slot")
                 .size(componentCardWidth, 92.0f)
-                .gap(12.0f)
                 .content([&] {
-                    components::radio(ui, "control.radio.a")
+                    components::radioGroup(ui, "controls.radios")
                         .theme(themeColors())
                         .size(componentCardWidth, 30.0f)
-                        .selected(radioA)
-                        .text("Radio A")
-                        .onChange([this](bool selected) { if (selected) { radioA = true; } })
-                        .build();
-
-                    components::radio(ui, "control.radio.b")
-                        .theme(themeColors())
-                        .size(componentCardWidth, 30.0f)
-                        .selected(!radioA)
-                        .text("Radio B")
-                        .onChange([this](bool selected) { if (selected) { radioA = false; } })
+                        .gap(12.0f)
+                        .items({"Radio A", "Radio B"})
+                        .selected(radioA ? 0 : 1)
+                        .onChange([this](int selected) { radioA = selected == 0; })
                         .build();
                 })
                 .build();

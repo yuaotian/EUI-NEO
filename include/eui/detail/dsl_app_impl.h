@@ -267,9 +267,9 @@ bool update(core::window::Handle window, float deltaSeconds, int windowWidth, in
     }
 
     changed = detail::dslRuntime().update(window, deltaSeconds, pointerScale, effectiveScale, inputEnabled) || changed;
-    if (detail::dslRuntime().composeRequested()) {
-        // A compose can change retained content without changing the element structure.
-        // Rebuild the complete cache so state and release visuals update in this frame.
+    // 第一遍额外组合落业务状态，scope 若在末尾改变焦点，再用第二遍刷新焦点视觉。
+    constexpr int kMaxAdditionalComposePasses = 2;
+    for (int pass = 0; pass < kMaxAdditionalComposePasses && detail::dslRuntime().composeRequested(); ++pass) {
         detail::dslRuntime().requestFullPaint();
         composeFrame();
         changed = detail::dslRuntime().update(window, 0.0f, pointerScale, effectiveScale, inputEnabled) || changed;

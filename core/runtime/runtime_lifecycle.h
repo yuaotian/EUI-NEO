@@ -14,6 +14,9 @@ inline bool Runtime::initialize(core::window::Handle window) {
 template <typename ComposeFn>
 inline void Runtime::compose(const std::string& pageId, float logicalWidth, float logicalHeight, ComposeFn&& composeFn) {
     const std::vector<runtime::ElementSnapshot> previousStructure = elementStructure_;
+    const std::string focusBeforeCompose = focusedId_;
+    // 当前组合会读取最新焦点；仅当本次 reconcile 再次改变焦点时请求下一次组合。
+    focusRecomposeRequested_ = false;
     const Screen screen{logicalWidth, logicalHeight};
     ui_.begin(pageId);
     ui_.setFocusedId(focusedId_);
@@ -29,12 +32,18 @@ inline void Runtime::compose(const std::string& pageId, float logicalWidth, floa
             ui_.setFocusedId(focusedId_);
         }
     }
+    // 先同步 modal scope，再做 stale focus 清理，确保关闭时可以恢复 opener 焦点。
+    syncFocusScopes();
     if (!focusedId_.empty()) {
         const std::vector<std::string> focusIds = focusableIds();
         if (std::find(focusIds.begin(), focusIds.end(), focusedId_) == focusIds.end()) {
             // compose 后元素可能被删除、禁用或透明隐藏，不能保留悬空焦点。
             setFocusedId({});
         }
+    }
+    if (focusedId_ != focusBeforeCompose) {
+        // 组件焦点环在本次 compose 前已按旧焦点生成，交给宿主现有二次组合路径刷新。
+        focusRecomposeRequested_ = true;
     }
 
     if (elementStructure_ != previousStructure) {
@@ -116,8 +125,14 @@ inline bool Runtime::update(core::window::Handle window, float deltaSeconds, flo
             updateTextInput(textEvent);
         }
         for (const KeyEvent& key : keyboardEvent.keys) {
+            if (dispatchEscape(key, keyboardEvent.composing)) {
+                // 关闭 scope 后丢弃同一 tick 的剩余离散键，避免已关闭内容继续响应。
+                break;
+            }
             KeyboardEvent keyEvent;
             keyEvent.keys.push_back(key);
+            keyEvent.composing = keyboardEvent.composing;
+            keyEvent.compositionText = keyboardEvent.compositionText;
             updateTextInput(keyEvent);
             dispatchKey(key);
         }
@@ -144,7 +159,7 @@ inline bool Runtime::isAnimating() const {
 }
 
 inline bool Runtime::composeRequested() const {
-    return composeRequested_;
+    return composeRequested_ || focusRecomposeRequested_;
 }
 
 inline bool Runtime::paintRequested() const {
@@ -268,6 +283,12 @@ inline void Runtime::shutdown(bool releaseCachedImageTextures) {
     instances_.clear();
     elementStructure_.clear();
     hoverTargetCacheValid_ = false;
+    focusScopeStates_.clear();
+    activeFocusScopeIds_.clear();
+    activeFocusScopeId_.clear();
+    focusRecomposeRequested_ = false;
+    focusedId_.clear();
+    ui_.setFocusedId({});
     ui_.clearState();
 }
 

@@ -96,6 +96,9 @@ public:
         ui_.stack(id_)
             .size(screenWidth_, screenHeight_)
             .zIndex(zIndex_)
+            .disabled(!open_)
+            .modalFocusScope()
+            .onEscape(requestClose)
             .content([&] {
                 ui_.rect(id_ + ".backdrop")
                     .size(screenWidth_, screenHeight_)
@@ -134,6 +137,7 @@ public:
                                     theme::color(0.0f, 0.0f, 0.0f, 0.0f),
                                     theme::color(0.0f, 0.0f, 0.0f, 0.0f))
                             .blockPointer()
+                            .preserveFocusOnPress()
                             .build();
 
                         if (content_) {
@@ -196,6 +200,7 @@ public:
                                         .border(1.0f, theme::withAlpha(style_.primary, 0.64f))
                                         .shadow(10.0f, 0.0f, 3.0f, theme::withAlpha(style_.primary, 0.18f))
                                         .disabled(!open_)
+                                        .initialFocus()
                                         .onClick(onPrimary)
                                         .build();
                                 })

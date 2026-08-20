@@ -1,6 +1,6 @@
 #pragma once
-#pragma once
 
+#include "components/focus_ring.h"
 #include "components/theme.h"
 #include "core/dsl.h"
 #include "eui/signal.h"
@@ -12,6 +12,13 @@
 #include <vector>
 
 namespace components {
+
+namespace detail {
+struct TabsKeyboardState {
+    int observed = -1;
+    int value = 0;
+};
+}
 
 struct TabsStyle {
     TabsStyle() : TabsStyle(theme::dark()) {}
@@ -39,6 +46,8 @@ public:
     TabsBuilder& size(float width, float height) { width_ = width; height_ = height; return *this; }
     TabsBuilder& items(std::vector<std::string> value) { items_ = std::move(value); return *this; }
     TabsBuilder& selected(int value) { selected_ = value; return *this; }
+    TabsBuilder& disabled(bool value = true) { disabled_ = value; return *this; }
+    TabsBuilder& initialFocus(bool value = true) { initialFocus_ = value; return *this; }
     TabsBuilder& bind(eui::Signal<int>& signal) {
         selected(signal.get());
         onChange([&signal](int value) { signal.set(value); });
@@ -49,6 +58,8 @@ public:
     TabsBuilder& theme(const theme::ThemeColorTokens& tokens) {
         style_ = TabsStyle(tokens);
         metrics_ = tokens.metrics;
+        focusColor_ = tokens.primary;
+        focusLineWidth_ = theme::fieldVisuals(tokens).focusLineHeight;
         return *this;
     }
     TabsBuilder& transition(const core::Transition& value) { transition_ = value; return *this; }
@@ -65,10 +76,53 @@ public:
         const float tabWidth = count > 0 ? width_ / static_cast<float>(count) : width_;
         const float labelLineHeight = fontSize;
         const float labelY = std::max(0.0f, (height_ - labelLineHeight) * 0.5f) - metrics_.spacing.micro;
+        const bool effectiveDisabled = disabled_ || count <= 0;
         const std::function<void(int)> onChange = onChange_;
+        // 受控值可能在同一帧内连续变更，局部状态用于保留每次键盘步进结果。
+        auto& keyboard = ui_.state<detail::TabsKeyboardState>(id_ + ".keyboard");
+        if (keyboard.observed != selected) {
+            keyboard.observed = selected;
+            keyboard.value = selected;
+        }
+        const std::function<void(int)> select = [onChange, &keyboard](int value) {
+            keyboard.value = value;
+            keyboard.observed = value;
+            if (onChange) {
+                onChange(value);
+            }
+        };
+        const std::function<void(const core::KeyEvent&)> onKey = [select, &keyboard, count](const core::KeyEvent& event) {
+            if ((event.action != core::KeyAction::Press && event.action != core::KeyAction::Repeat) ||
+                count <= 0) {
+                return;
+            }
+            int next = keyboard.value;
+            switch (event.key) {
+            case core::InputKey::Left:
+                next = next <= 0 ? count - 1 : next - 1;
+                break;
+            case core::InputKey::Right:
+                next = (next + 1) % count;
+                break;
+            case core::InputKey::Home:
+                next = 0;
+                break;
+            case core::InputKey::End:
+                next = count - 1;
+                break;
+            default:
+                return;
+            }
+            select(next);
+        };
+        const bool focused = ui_.isFocused(id_);
 
         ui_.stack(id_)
             .size(width_, height_)
+            .disabled(effectiveDisabled)
+            .focusable()
+            .initialFocus(initialFocus_)
+            .onKey(onKey)
             .content([&] {
                 ui_.rect(id_ + ".line")
                     .y(std::max(0.0f, height_ - 1.0f))
@@ -79,19 +133,16 @@ public:
                 for (int index = 0; index < count; ++index) {
                     const float x = static_cast<float>(index) * tabWidth;
                     const bool active = index == selected;
-                    ui_.rect(id_ + ".hit." + std::to_string(index))
+                    auto hit = ui_.rect(id_ + ".hit." + std::to_string(index))
                         .x(x)
                         .size(tabWidth, height_)
                         .states(theme::color(0.0f, 0.0f, 0.0f, 0.0f),
                                 theme::color(0.0f, 0.0f, 0.0f, 0.0f),
                                 theme::color(0.0f, 0.0f, 0.0f, 0.0f))
                         .radius(metrics_.radius.control)
-                        .onClick([onChange, index] {
-                            if (onChange) {
-                                onChange(index);
-                            }
-                        })
-                        .build();
+                        .onClick([select, index] { select(index); });
+                    hit.focusTarget(id_);
+                    hit.build();
 
                     ui_.text(id_ + ".label." + std::to_string(index))
                         .x(x)
@@ -107,6 +158,15 @@ public:
                         .animate(core::AnimProperty::TextColor)
                         .build();
                 }
+
+                detail::focusRing(ui_,
+                                  id_ + ".focus",
+                                  {0.0f, 0.0f, width_, height_},
+                                  metrics_.radius.control,
+                                  focusColor_,
+                                  focusLineWidth_,
+                                  focused && !effectiveDisabled,
+                                  transition_);
 
                 if (count > 0) {
                     ui_.rect(id_ + ".indicator")
@@ -133,9 +193,13 @@ private:
     core::Transition transition_ = core::Transition::make(0.16f, core::Ease::OutCubic);
     std::function<void(int)> onChange_;
     int selected_ = 0;
+    bool disabled_ = false;
+    bool initialFocus_ = false;
     float width_ = 360.0f;
     float height_ = 42.0f;
     float fontSize_ = 0.0f;
+    core::Color focusColor_ = theme::dark().primary;
+    float focusLineWidth_ = theme::fieldVisuals(theme::dark()).focusLineHeight;
 };
 
 inline TabsBuilder tabs(core::dsl::Ui& ui, const std::string& id) {

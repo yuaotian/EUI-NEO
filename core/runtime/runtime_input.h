@@ -61,6 +61,12 @@ inline std::string Runtime::hitTestFocusable(const PointerEvent& event, float dp
             break;
         }
     }
+    if (!targetId.empty() && !activeFocusScopeId_.empty()) {
+        const std::vector<std::string> ids = focusableIds();
+        if (std::find(ids.begin(), ids.end(), targetId) == ids.end()) {
+            targetId.clear();
+        }
+    }
     return targetId;
 }
 
@@ -217,6 +223,15 @@ inline bool Runtime::hitTestFocusableElement(
         targetId = focusedId_;
         return true;
     }
+    if (!element.focusTargetId.empty()) {
+        const std::vector<std::string> ids = focusableIds();
+        if (std::find(ids.begin(), ids.end(), element.focusTargetId) != ids.end()) {
+            targetId = element.focusTargetId;
+        } else {
+            targetId.clear();
+        }
+        return true;
+    }
     if (element.focusable && !element.disabled) {
         targetId = element.id;
         return true;
@@ -249,14 +264,197 @@ inline void Runtime::collectFocusableIds(const Element& element,
 }
 
 inline std::vector<std::string> Runtime::focusableIds() const {
+    return focusableIds(activeFocusScopeId_);
+}
+
+inline std::vector<std::string> Runtime::focusableIds(const std::string& scopeId) const {
     std::vector<std::string> ids;
+    if (!scopeId.empty()) {
+        const Element* scope = ui_.find(scopeId);
+        if (scope == nullptr || scope->disabled || scope->opacity <= 0.001f) {
+            return ids;
+        }
+        collectFocusableIds(*scope, false, true, ids);
+        return ids;
+    }
     for (const auto& rootStorage : ui_.roots()) {
-        const Element* root = rootStorage.get();
-        if (root != nullptr) {
-            collectFocusableIds(*root, false, true, ids);
+        if (rootStorage != nullptr) {
+            collectFocusableIds(*rootStorage, false, true, ids);
         }
     }
     return ids;
+}
+
+inline void Runtime::collectFocusScopeIds(const Element& element,
+                                          bool ancestorDisabled,
+                                          bool ancestorVisible,
+                                          std::vector<std::string>& ids) const {
+    const bool disabledTree = ancestorDisabled || element.disabled;
+    const bool visibleTree = ancestorVisible && element.opacity > 0.001f;
+    if (disabledTree || !visibleTree) {
+        return;
+    }
+    if (element.modalFocusScope) {
+        ids.push_back(element.id);
+    }
+    // orderedChildren 是绘制顺序；最后一个可见 scope 才能接收当前键盘输入。
+    for (const Element* child : element.orderedChildren) {
+        if (child != nullptr) {
+            collectFocusScopeIds(*child, disabledTree, visibleTree, ids);
+        }
+    }
+}
+
+inline std::string Runtime::initialFocusId(const std::string& scopeId) const {
+    const std::vector<std::string> ids = focusableIds(scopeId);
+    for (const std::string& id : ids) {
+        const Element* element = ui_.find(id);
+        if (element != nullptr && element->initialFocus) {
+            return id;
+        }
+    }
+    return ids.empty() ? std::string{} : ids.front();
+}
+
+inline void Runtime::pruneFocusScopeStates(const std::vector<std::string>& visibleScopeIds) {
+    bool removed = true;
+    while (removed) {
+        removed = false;
+        for (auto state = focusScopeStates_.begin(); state != focusScopeStates_.end(); ++state) {
+            if (std::find(visibleScopeIds.begin(), visibleScopeIds.end(), state->first) !=
+                visibleScopeIds.end()) {
+                continue;
+            }
+            const FocusScopeState closed = state->second;
+            const std::string closedId = state->first;
+            for (auto& candidate : focusScopeStates_) {
+                if (candidate.second.parentScopeId == closedId) {
+                    // 非顶层 scope 关闭时只拼接 restore 链，不改变当前顶层焦点。
+                    candidate.second.restoreId = closed.restoreId;
+                    candidate.second.parentScopeId = closed.parentScopeId;
+                }
+            }
+            focusScopeStates_.erase(state);
+            removed = true;
+            break;
+        }
+    }
+}
+
+inline void Runtime::syncFocusScopes() {
+    std::vector<std::string> nextScopes;
+    for (const Element* root : ui_.orderedRoots()) {
+        if (root != nullptr) {
+            collectFocusScopeIds(*root, false, true, nextScopes);
+        }
+    }
+
+    const std::string previousTop = activeFocusScopeId_;
+    const std::string nextTop = nextScopes.empty() ? std::string{} : nextScopes.back();
+    const auto isActive = [&nextScopes](const std::string& id) {
+        return std::find(nextScopes.begin(), nextScopes.end(), id) != nextScopes.end();
+    };
+
+    if (nextTop == previousTop) {
+        pruneFocusScopeStates(nextScopes);
+        activeFocusScopeIds_ = std::move(nextScopes);
+        activeFocusScopeId_ = nextTop;
+        return;
+    }
+
+    // 顶层 scope 仍在而新的 scope 覆盖它，或从无 scope 首次打开：保存当前焦点。
+    if (previousTop.empty() || isActive(previousTop)) {
+        bool restoreRevealedParent = false;
+        std::string restoreCandidate;
+        if (!nextTop.empty()) {
+            const auto nextState = focusScopeStates_.find(nextTop);
+            const auto previousState = focusScopeStates_.find(previousTop);
+            const bool hasNextState = nextState != focusScopeStates_.end();
+            const bool hasPreviousState = previousState != focusScopeStates_.end();
+            const FocusScopeState previousStateValue = hasPreviousState
+                ? previousState->second
+                : FocusScopeState{};
+            const bool wasVisible = std::find(activeFocusScopeIds_.begin(), activeFocusScopeIds_.end(), nextTop) !=
+                activeFocusScopeIds_.end();
+            if (!hasNextState) {
+                if (wasVisible && hasPreviousState) {
+                    // 已存在但尚未成为 top 的 sibling 继承旧 top 的恢复链，不制造反向 parent edge。
+                    focusScopeStates_[nextTop] = {
+                        previousStateValue.restoreId,
+                        previousStateValue.parentScopeId};
+                } else {
+                    // 首次打开的 scope 才记录当前焦点和旧 top 作为 activation parent。
+                    focusScopeStates_[nextTop] = {focusedId_, previousTop};
+                }
+            } else if (nextState->second.parentScopeId == previousTop) {
+                // child 再次升到 parent 上方时，刷新关闭 child 后要返回的 parent 焦点。
+                nextState->second.restoreId = focusedId_;
+            }
+            if (hasPreviousState && previousStateValue.parentScopeId == nextTop) {
+                // child 降到 parent 下方时，恢复 child 打开前保存的 parent 焦点。
+                restoreRevealedParent = true;
+                restoreCandidate = previousStateValue.restoreId;
+            } else if (hasNextState &&
+                       nextState->second.parentScopeId != previousTop) {
+                // 无直接 parent 关系时是 sibling 重排，只刷新恢复焦点，不改 parent edge。
+                nextState->second.restoreId = focusedId_;
+            }
+        }
+        pruneFocusScopeStates(nextScopes);
+        activeFocusScopeIds_ = std::move(nextScopes);
+        activeFocusScopeId_ = nextTop;
+        if (restoreRevealedParent) {
+            const std::vector<std::string> ids = focusableIds(activeFocusScopeId_);
+            if (std::find(ids.begin(), ids.end(), restoreCandidate) != ids.end()) {
+                setFocusedId(restoreCandidate);
+            } else {
+                setFocusedId({});
+            }
+        } else {
+            setFocusedId(initialFocusId(activeFocusScopeId_));
+        }
+        return;
+    }
+
+    // 顶层 scope 关闭：沿 activation parent 链寻找仍然有效的 restore target。
+    std::string candidate;
+    std::string parentScope;
+    if (const auto state = focusScopeStates_.find(previousTop); state != focusScopeStates_.end()) {
+        candidate = state->second.restoreId;
+        parentScope = state->second.parentScopeId;
+    }
+    while (!parentScope.empty() && parentScope != nextTop && !isActive(parentScope)) {
+        const auto parent = focusScopeStates_.find(parentScope);
+        if (parent == focusScopeStates_.end()) {
+            break;
+        }
+        candidate = parent->second.restoreId;
+        parentScope = parent->second.parentScopeId;
+    }
+
+    activeFocusScopeIds_ = std::move(nextScopes);
+    activeFocusScopeId_ = nextTop;
+    const bool nextNeedsInitialFocus = !nextTop.empty() &&
+        focusScopeStates_.find(nextTop) == focusScopeStates_.end();
+    if (nextNeedsInitialFocus) {
+        focusScopeStates_[nextTop] = {candidate, parentScope};
+    }
+    pruneFocusScopeStates(activeFocusScopeIds_);
+    const std::vector<std::string> ids = focusableIds(activeFocusScopeId_);
+    if (nextNeedsInitialFocus) {
+        setFocusedId(initialFocusId(nextTop));
+    } else if (!nextTop.empty() && parentScope != nextTop) {
+        // 动态重排可能保留跨层 restore candidate，先验证并恢复它，再回退到 scope 初焦。
+        if (std::find(ids.begin(), ids.end(), candidate) != ids.end()) {
+            setFocusedId(candidate);
+        } else {
+            setFocusedId(initialFocusId(nextTop));
+        }
+    } else if (std::find(ids.begin(), ids.end(), candidate) != ids.end()) {
+        setFocusedId(candidate);
+    } else {
+        setFocusedId({});
+    }
 }
 
 inline bool Runtime::focusNext(bool reverse) {
@@ -337,6 +535,22 @@ inline bool Runtime::dispatchKey(const KeyEvent& event) {
         handled = activateFocused() || handled;
     }
     return handled;
+}
+
+inline bool Runtime::dispatchEscape(const KeyEvent& event, bool composing) {
+    if (event.key != InputKey::Escape || event.action != KeyAction::Press || composing ||
+        activeFocusScopeId_.empty()) {
+        return false;
+    }
+    const Element* scope = ui_.find(activeFocusScopeId_);
+    if (scope == nullptr || !scope->onEscape) {
+        return false;
+    }
+    // Esc 由顶层 scope 先消费，避免输入控件的 legacy onTextInput 把 Esc 当提交键。
+    scope->onEscape();
+    composeRequested_ = true;
+    paintRequested_ = true;
+    return true;
 }
 
 inline void Runtime::setFocusedId(const std::string& id) {

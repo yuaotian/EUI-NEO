@@ -151,6 +151,11 @@ struct Element {
     bool interactive = false;
     bool focusable = false;
     bool preserveFocusOnPress = false;
+    // 复合控件的子热区可把鼠标焦点代理到稳定的复合焦点节点。
+    std::string focusTargetId;
+    // modal scope 限制键盘焦点范围，initialFocus 标记进入 scope 时的首选节点。
+    bool modalFocusScope = false;
+    bool initialFocus = false;
     bool disabled = false;
     HitTestMode hitTestMode = HitTestMode::Layout;
     bool hasImeRect = false;
@@ -171,6 +176,7 @@ struct Element {
     // 键盘合同与文本输入分离：onKey 接收当前焦点元素的离散按键，onActivate 处理 Enter/Space 激活。
     std::function<void(const KeyEvent&)> onKey;
     std::function<void()> onActivate;
+    std::function<void()> onEscape;
     std::function<void(const ScrollEvent&)> onScroll;
     std::function<void(float)> onScrollOffsetChanged;
     std::function<void(const DragEvent&)> onDrag;
@@ -531,6 +537,21 @@ public:
         return self();
     }
 
+    Derived& focusTarget(const std::string& id) {
+        element_->focusTargetId = ui_->resolveId(id);
+        return self();
+    }
+
+    Derived& modalFocusScope(bool value = true) {
+        element_->modalFocusScope = value;
+        return self();
+    }
+
+    Derived& initialFocus(bool value = true) {
+        element_->initialFocus = value;
+        return self();
+    }
+
     Derived& imeRect(float xValue, float yValue, float widthValue, float heightValue) {
         element_->hasImeRect = true;
         element_->imeRect = {
@@ -722,6 +743,11 @@ public:
         element_->interactive = true;
         element_->cursor = CursorShape::Hand;
         element_->onActivate = std::move(callback);
+        return self();
+    }
+
+    Derived& onEscape(std::function<void()> callback) {
+        element_->onEscape = std::move(callback);
         return self();
     }
 
@@ -1663,6 +1689,9 @@ private:
     static bool elementNeedsUpdate(const Element& element) {
         return element.interactive ||
                element.focusable ||
+               !element.focusTargetId.empty() ||
+               element.modalFocusScope ||
+               element.initialFocus ||
                element.disabled ||
                element.hasImeRect ||
                element.onClick ||
@@ -1675,6 +1704,7 @@ private:
                element.onTextInput ||
                element.onKey ||
                element.onActivate ||
+               element.onEscape ||
                element.onScroll ||
                element.onScrollOffsetChanged ||
                element.onDrag ||
@@ -1713,6 +1743,9 @@ private:
         return element.clip ||
                element.interactive ||
                element.focusable ||
+               !element.focusTargetId.empty() ||
+               element.modalFocusScope ||
+               element.initialFocus ||
                element.hasImeRect ||
                element.onClick ||
                element.onPress ||
@@ -1724,6 +1757,7 @@ private:
                element.onTextInput ||
                element.onKey ||
                element.onActivate ||
+               element.onEscape ||
                element.onScroll ||
                element.onScrollOffsetChanged ||
                element.onDrag ||
