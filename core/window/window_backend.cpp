@@ -360,7 +360,10 @@ Handle createWindow(const WindowCreateRequest& request) {
         request.height,
         flags);
     if (window != nullptr && (request.minWidth > 0 || request.minHeight > 0)) {
-        SDL_SetWindowMinimumSize(window, request.minWidth, request.minHeight);
+        SDL_SetWindowMinimumSize(
+            window,
+            std::max(1, request.minWidth),
+            std::max(1, request.minHeight));
     }
 #if defined(__linux__) && !defined(__ANDROID__) && defined(SDL_VIDEO_DRIVER_X11)
     if (window != nullptr && request.highDpi) {
