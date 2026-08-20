@@ -514,6 +514,10 @@ void setImeCursorRect(Handle window, float x, float y, float width, float height
 #define GLFW_INCLUDE_NONE
 #endif
 #include <GLFW/glfw3.h>
+#if defined(_WIN32)
+#define GLFW_EXPOSE_NATIVE_WIN32
+#include <GLFW/glfw3native.h>
+#endif
 
 #include "core/platform/ime_bridge.h"
 
@@ -564,6 +568,11 @@ void destroyWindow(Handle window) {
 NativeWindowInfo nativeWindowInfo(Handle window) {
     NativeWindowInfo result;
     result.handle = window;
+#if defined(_WIN32)
+    result.platformWindow = window != nullptr
+        ? reinterpret_cast<void*>(glfwGetWin32Window(static_cast<GLFWwindow*>(window)))
+        : nullptr;
+#endif
     return result;
 }
 
