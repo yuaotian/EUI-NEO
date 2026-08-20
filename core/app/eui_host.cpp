@@ -183,6 +183,10 @@ bool EuiAppHost::initialized() const {
     return impl_->state.initialized;
 }
 
+double EuiAppHost::timeSeconds() const {
+    return impl_->state.initialized ? core::window::timeSeconds() : 0.0;
+}
+
 WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     if (!impl_->state.initialized || !config.compose ||
         config.width <= 0 || config.height <= 0) {
@@ -428,8 +432,9 @@ bool EuiAppHost::render() {
         hosted.runtime.render(*hosted.renderer, framebufferWidth, framebufferHeight, dpiScale);
         hosted.renderer->present();
         hosted.paintRequested = false;
+        // deadline 沿用最近 tick 的宿主时钟域，不在 render 阶段切回其他 epoch。
         hosted.nextDeadline = hosted.runtime.isAnimating()
-            ? core::window::timeSeconds() + (1.0 / 60.0)
+            ? hosted.lastTick + (1.0 / 60.0)
             : std::numeric_limits<double>::infinity();
         rendered = true;
     }

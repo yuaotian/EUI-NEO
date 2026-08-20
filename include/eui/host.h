@@ -53,6 +53,8 @@ public:
     bool initialize();
     void shutdown();
     bool initialized() const;
+    // initialize 成功后，宿主使用此时钟计算 nextDeadline - timeSeconds()。
+    double timeSeconds() const;
 
     WindowId createWindow(const WindowConfig& config);
     bool showWindow(WindowId id);
@@ -62,7 +64,7 @@ public:
     bool shouldClose(WindowId id) const;
     window::NativeWindowInfo nativeWindowInfo(WindowId id) const;
 
-    // nowSeconds 使用与 core::window::timeSeconds 相同的单调时钟单位。
+    // 显式 nowSeconds 必须来自 timeSeconds()；-1 表示内部读取同一时钟。
     // tick 只更新状态，不读取线程消息队列，也不提交交换缓冲区。
     TickResult tick(double nowSeconds = -1.0, bool updateRequested = false);
     bool render();
