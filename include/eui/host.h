@@ -8,12 +8,15 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace eui {
 
 using WindowId = std::uint64_t;
 constexpr WindowId kInvalidWindowId = 0;
+using WindowPlacement = window::WindowPlacement;
+using WindowRole = window::WindowRole;
 
 // 宿主窗口描述只保存 EUI 页面所需的数据，不接管宿主线程的消息泵。
 struct WindowConfig {
@@ -25,6 +28,11 @@ struct WindowConfig {
     bool resizable = true;
     bool highDpi = true;
     bool visible = true;
+    WindowRole role = WindowRole::Main;
+    // 仅 Tool 可设置 owner，且必须引用同一 host 中已经存在的 Main。
+    WindowId owner = kInvalidWindowId;
+    // positioned=false 时由平台决定 normal bounds，但仍保留 maximized 首次显示状态。
+    std::optional<WindowPlacement> initialPlacement;
     // 首版保留 EUI 请求语义，不把它解释为 Win32 父子窗口关系。
     bool modal = false;
     std::function<void(Ui&, const Screen&)> compose;
@@ -59,9 +67,12 @@ public:
     WindowId createWindow(const WindowConfig& config);
     bool showWindow(WindowId id);
     bool hideWindow(WindowId id);
+    // Main 仍拥有 Tool 时返回 false，调用方必须先显式销毁 Tool。
     bool destroyWindow(WindowId id);
     bool isVisible(WindowId id) const;
     bool shouldClose(WindowId id) const;
+    // 返回当前角色的 normal bounds；坐标只支持相同角色的持久化 round-trip。
+    std::optional<WindowPlacement> windowPlacement(WindowId id) const;
     window::NativeWindowInfo nativeWindowInfo(WindowId id) const;
 
     // 显式 nowSeconds 必须来自 timeSeconds()；-1 表示内部读取同一时钟。

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <optional>
+
 namespace core::window {
 
 using Handle = void*;
@@ -16,6 +18,21 @@ enum class RenderApi {
     Vulkan
 };
 
+enum class WindowRole {
+    Main,
+    Tool
+};
+
+struct WindowPlacement {
+    // false 表示 normal 位置和尺寸继续由平台决定，但 maximized 仍作为首次显示状态生效。
+    bool positioned = false;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+    bool maximized = false;
+};
+
 struct WindowCreateRequest {
     int width = 0;
     int height = 0;
@@ -23,6 +40,11 @@ struct WindowCreateRequest {
     bool resizable = true;
     bool highDpi = true;
     bool modal = false;
+    bool visible = true;
+    WindowRole role = WindowRole::Main;
+    // owner 是后端窗口句柄，独立于 OpenGL context share 使用的 parent。
+    Handle owner = nullptr;
+    std::optional<WindowPlacement> initialPlacement;
     Handle parent = nullptr;
     RenderApi renderApi = RenderApi::OpenGL;
 };

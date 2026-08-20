@@ -12,6 +12,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <memory>
@@ -30,6 +31,9 @@ struct HostedWindow {
     bool paintRequested = true;
     bool iconified = false;
     bool closeRequested = false;
+    WindowRole role = WindowRole::Main;
+    WindowId owner = kInvalidWindowId;
+    bool maximizeOnFirstShow = false;
     double lastTick = 0.0;
     double nextDeadline = std::numeric_limits<double>::infinity();
 };
@@ -68,6 +72,30 @@ float windowPointerScale(GLFWwindow* window) {
 void requestFullPaint(HostedWindow& hosted) {
     hosted.paintRequested = true;
     hosted.runtime.requestFullPaint();
+}
+
+bool validPlacementBounds(const WindowPlacement& placement) {
+    if (!placement.positioned) {
+        return true;
+    }
+    if (placement.width <= 0 || placement.height <= 0) {
+        return false;
+    }
+    const std::int64_t right = static_cast<std::int64_t>(placement.x) + placement.width;
+    const std::int64_t bottom = static_cast<std::int64_t>(placement.y) + placement.height;
+    return right >= std::numeric_limits<int>::min() &&
+           right <= std::numeric_limits<int>::max() &&
+           bottom >= std::numeric_limits<int>::min() &&
+           bottom <= std::numeric_limits<int>::max();
+}
+
+void showHostedWindow(HostedWindow& hosted) {
+    if (hosted.maximizeOnFirstShow) {
+        // 最大化推迟到显式 show，确保 renderer、Runtime 和输入链准备完成前 HWND 始终隐藏。
+        glfwMaximizeWindow(hosted.window);
+        hosted.maximizeOnFirstShow = false;
+    }
+    glfwShowWindow(hosted.window);
 }
 
 void installWindowCallbacks(HostedWindow& hosted) {
@@ -170,8 +198,16 @@ void EuiAppHost::shutdown() {
         return;
     }
 
+    // Win32 会随 owner 自动销毁 owned HWND；必须先释放 Tool，避免留下失效的 GLFW/IME 状态。
     for (auto& entry : impl_->state.windows) {
-        destroyHostedWindow(entry.second);
+        if (entry.second && entry.second->role == WindowRole::Tool) {
+            destroyHostedWindow(entry.second);
+        }
+    }
+    for (auto& entry : impl_->state.windows) {
+        if (entry.second) {
+            destroyHostedWindow(entry.second);
+        }
     }
     impl_->state.windows.clear();
     glfwTerminate();
@@ -189,7 +225,20 @@ double EuiAppHost::timeSeconds() const {
 
 WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     if (!impl_->state.initialized || !config.compose ||
-        config.width <= 0 || config.height <= 0) {
+        config.width <= 0 || config.height <= 0 ||
+        (config.initialPlacement && !validPlacementBounds(*config.initialPlacement))) {
+        return kInvalidWindowId;
+    }
+
+    HostedWindow* owner = nullptr;
+    if (config.role == WindowRole::Tool) {
+        const auto ownerIterator = impl_->state.windows.find(config.owner);
+        if (config.owner == kInvalidWindowId || ownerIterator == impl_->state.windows.end() ||
+            !ownerIterator->second || ownerIterator->second->role != WindowRole::Main) {
+            return kInvalidWindowId;
+        }
+        owner = ownerIterator->second.get();
+    } else if (config.owner != kInvalidWindowId) {
         return kInvalidWindowId;
     }
 
@@ -209,14 +258,16 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     nativeRequest.resizable = config.resizable;
     nativeRequest.highDpi = config.highDpi;
     nativeRequest.modal = config.modal;
+    // hosted 先完成角色、placement、renderer、Runtime 与输入链，再按 config.visible 显式显示。
+    nativeRequest.visible = false;
+    nativeRequest.role = config.role;
+    nativeRequest.owner = owner != nullptr ? owner->window : nullptr;
+    nativeRequest.initialPlacement = config.initialPlacement;
     nativeRequest.renderApi = core::render::windowRenderApi();
     // WindowCreateRequest::parent 当前表示 OpenGL context share，不是 HWND 父子关系。
     nativeRequest.parent = nullptr;
-    glfwWindowHint(GLFW_VISIBLE, config.visible ? GLFW_TRUE : GLFW_FALSE);
 
     auto* window = static_cast<GLFWwindow*>(core::window::createWindow(nativeRequest));
-    // GLFW hint 是进程全局状态；创建后恢复默认值，避免影响其他窗口创建路径。
-    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     if (window == nullptr) {
         return kInvalidWindowId;
     }
@@ -233,6 +284,10 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     hosted->window = window;
     hosted->renderer = std::move(renderer);
     hosted->visible = config.visible;
+    hosted->role = config.role;
+    hosted->owner = config.owner;
+    hosted->maximizeOnFirstShow =
+        config.initialPlacement && config.initialPlacement->maximized;
     hosted->lastTick = core::window::timeSeconds();
     hosted->nextDeadline = hosted->lastTick;
     // hosted 模式不依赖 standalone app 配置；窗口缩放由 DPI 和此显式值决定。
@@ -244,7 +299,7 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
 
     const WindowId id = hosted->id;
     if (config.visible) {
-        glfwShowWindow(window);
+        showHostedWindow(*hosted);
     } else {
         glfwHideWindow(window);
         hosted->paintRequested = false;
@@ -266,7 +321,7 @@ bool EuiAppHost::showWindow(WindowId id) {
     if (glfwGetWindowAttrib(hosted.window, GLFW_ICONIFIED) == GLFW_TRUE) {
         glfwRestoreWindow(hosted.window);
     }
-    glfwShowWindow(hosted.window);
+    showHostedWindow(hosted);
     requestFullPaint(hosted);
     hosted.lastTick = core::window::timeSeconds();
     hosted.nextDeadline = hosted.lastTick;
@@ -299,6 +354,13 @@ bool EuiAppHost::destroyWindow(WindowId id) {
         return false;
     }
 
+    for (const auto& entry : impl_->state.windows) {
+        if (entry.second && entry.second->owner == id) {
+            // 不隐式级联，避免调用方仍持有的 Tool WindowId 静默失效。
+            return false;
+        }
+    }
+
     destroyHostedWindow(iterator->second);
     impl_->state.windows.erase(iterator);
     return true;
@@ -315,6 +377,18 @@ bool EuiAppHost::shouldClose(WindowId id) const {
         return false;
     }
     return iterator->second->closeRequested || glfwWindowShouldClose(iterator->second->window);
+}
+
+std::optional<WindowPlacement> EuiAppHost::windowPlacement(WindowId id) const {
+    const auto iterator = impl_->state.windows.find(id);
+    if (iterator == impl_->state.windows.end() || !iterator->second) {
+        return std::nullopt;
+    }
+    WindowPlacement placement;
+    if (!core::window::queryWindowPlacement(iterator->second->window, placement)) {
+        return std::nullopt;
+    }
+    return placement;
 }
 
 window::NativeWindowInfo EuiAppHost::nativeWindowInfo(WindowId id) const {

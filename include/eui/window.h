@@ -10,5 +10,7 @@ using CursorType = core::window::CursorType;
 using Handle = core::window::Handle;
 using NativeWindowInfo = core::window::NativeWindowInfo;
 using RenderApi = core::window::RenderApi;
+using WindowPlacement = core::window::WindowPlacement;
+using WindowRole = core::window::WindowRole;
 
 } // namespace eui::window

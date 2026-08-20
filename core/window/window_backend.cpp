@@ -3,7 +3,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <limits>
 #if defined(EUI_WINDOW_BACKEND_SDL2)
 
 #include <SDL.h>
@@ -410,6 +412,19 @@ NativeWindowInfo nativeWindowInfo(Handle window) {
     return result;
 }
 
+bool queryWindowPlacement(Handle window, WindowPlacement& placement) {
+    if (window == nullptr) {
+        return false;
+    }
+
+    auto* sdlWindow = static_cast<SDL_Window*>(window);
+    placement.positioned = true;
+    SDL_GetWindowPosition(sdlWindow, &placement.x, &placement.y);
+    SDL_GetWindowSize(sdlWindow, &placement.width, &placement.height);
+    placement.maximized = (SDL_GetWindowFlags(sdlWindow) & SDL_WINDOW_MAXIMIZED) != 0;
+    return placement.width > 0 && placement.height > 0;
+}
+
 ContextKey currentContextKey() {
     return SDL_GL_GetCurrentContext();
 }
@@ -539,6 +554,120 @@ void configureOpenGLWindowHints() {
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 }
 
+bool validPlacementBounds(const WindowPlacement& placement) {
+    if (!placement.positioned) {
+        return true;
+    }
+    if (placement.width <= 0 || placement.height <= 0) {
+        return false;
+    }
+    const std::int64_t right = static_cast<std::int64_t>(placement.x) + placement.width;
+    const std::int64_t bottom = static_cast<std::int64_t>(placement.y) + placement.height;
+    return right >= std::numeric_limits<int>::min() &&
+           right <= std::numeric_limits<int>::max() &&
+           bottom >= std::numeric_limits<int>::min() &&
+           bottom <= std::numeric_limits<int>::max();
+}
+
+bool applyWindowContract(GLFWwindow* window, const WindowCreateRequest& request) {
+    if (window == nullptr) {
+        return false;
+    }
+
+#if defined(_WIN32)
+    HWND hwnd = glfwGetWin32Window(window);
+    if (hwnd == nullptr) {
+        return false;
+    }
+
+    HWND owner = nullptr;
+    if (request.role == WindowRole::Tool) {
+        if (request.owner == nullptr) {
+            return false;
+        }
+        owner = glfwGetWin32Window(static_cast<GLFWwindow*>(request.owner));
+        if (owner == nullptr || owner == hwnd || IsWindow(owner) == FALSE) {
+            return false;
+        }
+    } else if (request.owner != nullptr) {
+        return false;
+    }
+
+    SetLastError(ERROR_SUCCESS);
+    const LONG_PTR currentStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (currentStyle == 0 && GetLastError() != ERROR_SUCCESS) {
+        return false;
+    }
+    LONG_PTR desiredStyle = currentStyle;
+    if (request.role == WindowRole::Tool) {
+        desiredStyle |= WS_EX_TOOLWINDOW;
+        desiredStyle &= ~static_cast<LONG_PTR>(WS_EX_APPWINDOW);
+    } else {
+        desiredStyle |= WS_EX_APPWINDOW;
+        desiredStyle &= ~static_cast<LONG_PTR>(WS_EX_TOOLWINDOW);
+    }
+
+    SetLastError(ERROR_SUCCESS);
+    const LONG_PTR previousStyle = SetWindowLongPtrW(hwnd, GWL_EXSTYLE, desiredStyle);
+    if (previousStyle == 0 && GetLastError() != ERROR_SUCCESS) {
+        return false;
+    }
+    if (request.role == WindowRole::Tool) {
+        SetLastError(ERROR_SUCCESS);
+        const LONG_PTR previousOwner = SetWindowLongPtrW(
+            hwnd, GWLP_HWNDPARENT, reinterpret_cast<LONG_PTR>(owner));
+        if (previousOwner == 0 && GetLastError() != ERROR_SUCCESS) {
+            return false;
+        }
+    }
+    if (SetWindowPos(
+            hwnd,
+            nullptr,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOOWNERZORDER |
+                SWP_NOACTIVATE | SWP_FRAMECHANGED) == FALSE) {
+        return false;
+    }
+
+    if (request.initialPlacement && request.initialPlacement->positioned) {
+        const WindowPlacement& initial = *request.initialPlacement;
+        if (!validPlacementBounds(initial)) {
+            return false;
+        }
+        WINDOWPLACEMENT nativePlacement{};
+        nativePlacement.length = sizeof(nativePlacement);
+        if (GetWindowPlacement(hwnd, &nativePlacement) == FALSE) {
+            return false;
+        }
+        nativePlacement.rcNormalPosition.left = initial.x;
+        nativePlacement.rcNormalPosition.top = initial.y;
+        nativePlacement.rcNormalPosition.right = initial.x + initial.width;
+        nativePlacement.rcNormalPosition.bottom = initial.y + initial.height;
+        // 最大化由 hosted 首次显式 show 时处理，避免 SetWindowPlacement 提前显示窗口。
+        nativePlacement.showCmd = SW_HIDE;
+        if (SetWindowPlacement(hwnd, &nativePlacement) == FALSE) {
+            return false;
+        }
+    }
+#else
+    if (request.role != WindowRole::Main || request.owner != nullptr) {
+        return false;
+    }
+    if (request.initialPlacement && request.initialPlacement->positioned) {
+        const WindowPlacement& initial = *request.initialPlacement;
+        if (!validPlacementBounds(initial)) {
+            return false;
+        }
+        glfwSetWindowPos(window, initial.x, initial.y);
+        glfwSetWindowSize(window, initial.width, initial.height);
+    }
+#endif
+    return true;
+}
+
 } // namespace
 
 Handle createWindow(const WindowCreateRequest& request) {
@@ -550,13 +679,24 @@ Handle createWindow(const WindowCreateRequest& request) {
         shareContext = static_cast<GLFWwindow*>(request.parent);
     }
     glfwWindowHint(GLFW_RESIZABLE, request.resizable ? GLFW_TRUE : GLFW_FALSE);
+    glfwWindowHint(GLFW_VISIBLE, request.visible ? GLFW_TRUE : GLFW_FALSE);
 
-    return glfwCreateWindow(
+    GLFWwindow* window = glfwCreateWindow(
         request.width,
         request.height,
         request.title != nullptr ? request.title : "",
         nullptr,
         shareContext);
+    // GLFW hint 是进程全局状态，恢复默认可见性，避免影响下一条窗口创建路径。
+    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
+    if (window == nullptr) {
+        return nullptr;
+    }
+    if (!applyWindowContract(window, request)) {
+        glfwDestroyWindow(window);
+        return nullptr;
+    }
+    return window;
 }
 
 void destroyWindow(Handle window) {
@@ -574,6 +714,36 @@ NativeWindowInfo nativeWindowInfo(Handle window) {
         : nullptr;
 #endif
     return result;
+}
+
+bool queryWindowPlacement(Handle window, WindowPlacement& placement) {
+    if (window == nullptr) {
+        return false;
+    }
+
+    auto* glfwWindow = static_cast<GLFWwindow*>(window);
+    placement.positioned = true;
+#if defined(_WIN32)
+    HWND hwnd = glfwGetWin32Window(glfwWindow);
+    if (hwnd == nullptr) {
+        return false;
+    }
+    WINDOWPLACEMENT nativePlacement{};
+    nativePlacement.length = sizeof(nativePlacement);
+    if (GetWindowPlacement(hwnd, &nativePlacement) == FALSE) {
+        return false;
+    }
+    placement.x = nativePlacement.rcNormalPosition.left;
+    placement.y = nativePlacement.rcNormalPosition.top;
+    placement.width = nativePlacement.rcNormalPosition.right - nativePlacement.rcNormalPosition.left;
+    placement.height = nativePlacement.rcNormalPosition.bottom - nativePlacement.rcNormalPosition.top;
+    placement.maximized = nativePlacement.showCmd == SW_SHOWMAXIMIZED || IsZoomed(hwnd) != FALSE;
+#else
+    glfwGetWindowPos(glfwWindow, &placement.x, &placement.y);
+    glfwGetWindowSize(glfwWindow, &placement.width, &placement.height);
+    placement.maximized = glfwGetWindowAttrib(glfwWindow, GLFW_MAXIMIZED) == GLFW_TRUE;
+#endif
+    return placement.width > 0 && placement.height > 0;
 }
 
 ContextKey currentContextKey() {
