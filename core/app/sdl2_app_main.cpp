@@ -360,7 +360,7 @@ std::unique_ptr<ManagedWindow> createManagedWindow(const app::DslWindowRequest& 
         core::window::destroyWindow(window);
         return {};
     }
-    if (!managed->content.initialize(window, request)) {
+    if (!managed->content.initialize(window, request, app::uiScale())) {
         managed->renderBackend.reset();
         core::window::destroyWindow(window);
         return {};

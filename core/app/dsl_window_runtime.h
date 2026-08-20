@@ -10,8 +10,9 @@ namespace app {
 
 class DslWindowRuntime {
 public:
-    bool initialize(core::window::Handle window, DslWindowRequest request) {
+    bool initialize(core::window::Handle window, DslWindowRequest request, float uiScale = 1.0f) {
         request_ = std::move(request);
+        uiScale_ = uiScale > 0.0f ? uiScale : 1.0f;
         paintRequested_ = true;
         return runtime_.initialize(window);
     }
@@ -51,7 +52,7 @@ public:
                 float dpiScale,
                 bool updateRequested,
                 bool inputEnabled = true) {
-        const float configuredScale = uiScale();
+        const float configuredScale = uiScale_;
         const float effectiveScale = dpiScale * configuredScale;
         logicalWidth /= configuredScale;
         logicalHeight /= configuredScale;
@@ -95,7 +96,7 @@ public:
 
     void render(core::render::RenderBackend& renderBackend, int framebufferWidth, int framebufferHeight, float dpiScale) {
         core::render::ScopedRenderBackend scopedRenderBackend(renderBackend);
-        runtime_.render(framebufferWidth, framebufferHeight, dpiScale * uiScale(), request_.clearColor);
+        runtime_.render(framebufferWidth, framebufferHeight, dpiScale * uiScale_, request_.clearColor);
         paintRequested_ = runtime_.paintRequested();
     }
 
@@ -104,6 +105,7 @@ private:
     DslWindowRequest request_;
     bool composed_ = false;
     bool paintRequested_ = true;
+    float uiScale_ = 1.0f;
     float logicalWidth_ = 0.0f;
     float logicalHeight_ = 0.0f;
 };

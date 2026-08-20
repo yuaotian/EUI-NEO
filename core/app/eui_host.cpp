@@ -233,7 +233,8 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     hosted->visible = config.visible;
     hosted->lastTick = core::window::timeSeconds();
     hosted->nextDeadline = hosted->lastTick;
-    if (!hosted->runtime.initialize(window, std::move(request))) {
+    // hosted 模式不依赖 standalone app 配置；窗口缩放由 DPI 和此显式值决定。
+    if (!hosted->runtime.initialize(window, std::move(request), 1.0f)) {
         destroyHostedWindow(hosted);
         return kInvalidWindowId;
     }

@@ -266,7 +266,7 @@ std::unique_ptr<ManagedWindow> createManagedWindow(const app::DslWindowRequest& 
     managed->state.nextFrameTime = managed->state.lastTitleUpdate;
     installWindowCallbacks(childWindow, managed->state);
 
-    if (!managed->content.initialize(childWindow, request)) {
+    if (!managed->content.initialize(childWindow, request, app::uiScale())) {
         managed->renderBackend.reset();
         core::releaseInputQueue(childWindow);
         core::window::destroyWindow(childWindow);
