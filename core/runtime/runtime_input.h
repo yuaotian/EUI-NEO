@@ -228,6 +228,117 @@ inline bool Runtime::hitTestFocusableElement(
     return false;
 }
 
+inline void Runtime::collectFocusableIds(const Element& element,
+                                         bool ancestorDisabled,
+                                         bool ancestorVisible,
+                                         std::vector<std::string>& ids) const {
+    const bool disabledTree = ancestorDisabled || element.disabled;
+    // opacity=0 是 DSL 当前表达的不可见状态；祖先透明时子树同样不参与键盘焦点。
+    const bool visibleTree = ancestorVisible && element.opacity > 0.001f;
+    if (!disabledTree && visibleTree && element.focusable) {
+        ids.push_back(element.id);
+    }
+
+    // children 保留 compose/document 顺序；orderedChildren 经过 z-index 排序，仅供绘制/命中使用。
+    for (const auto& childStorage : element.children) {
+        const Element* child = childStorage.get();
+        if (child != nullptr) {
+            collectFocusableIds(*child, disabledTree, visibleTree, ids);
+        }
+    }
+}
+
+inline std::vector<std::string> Runtime::focusableIds() const {
+    std::vector<std::string> ids;
+    for (const auto& rootStorage : ui_.roots()) {
+        const Element* root = rootStorage.get();
+        if (root != nullptr) {
+            collectFocusableIds(*root, false, true, ids);
+        }
+    }
+    return ids;
+}
+
+inline bool Runtime::focusNext(bool reverse) {
+    const std::vector<std::string> ids = focusableIds();
+    if (ids.empty()) {
+        return false;
+    }
+
+    std::size_t nextIndex = 0;
+    const auto current = std::find(ids.begin(), ids.end(), focusedId_);
+    if (current == ids.end()) {
+        nextIndex = reverse ? ids.size() - 1 : 0;
+    } else if (reverse) {
+        const std::size_t currentIndex = static_cast<std::size_t>(current - ids.begin());
+        nextIndex = currentIndex == 0 ? ids.size() - 1 : currentIndex - 1;
+    } else {
+        const std::size_t currentIndex = static_cast<std::size_t>(current - ids.begin());
+        nextIndex = (currentIndex + 1) % ids.size();
+    }
+
+    setFocusedId(ids[nextIndex]);
+    return true;
+}
+
+inline bool Runtime::activateFocused() {
+    if (focusedId_.empty()) {
+        return false;
+    }
+
+    const std::vector<std::string> ids = focusableIds();
+    if (std::find(ids.begin(), ids.end(), focusedId_) == ids.end()) {
+        return false;
+    }
+
+    const std::string targetId = focusedId_;
+    Element* element = ui_.find(targetId);
+    if (element == nullptr || !element->onActivate) {
+        return false;
+    }
+
+    element->onActivate();
+    composeRequested_ = true;
+    paintRequested_ = true;
+    return true;
+}
+
+inline bool Runtime::dispatchKey(const KeyEvent& event) {
+    if (event.key == InputKey::Tab) {
+        // Tab 只在 Press 边沿移动一次，避免 GLFW repeat 把焦点快速跳过多个控件。
+        return event.action == KeyAction::Press && focusNext(event.modifiers.shift);
+    }
+
+    if (focusedId_.empty()) {
+        return false;
+    }
+
+    const std::vector<std::string> ids = focusableIds();
+    if (std::find(ids.begin(), ids.end(), focusedId_) == ids.end()) {
+        return false;
+    }
+
+    const std::string targetId = focusedId_;
+    Element* element = ui_.find(targetId);
+    if (element == nullptr) {
+        return false;
+    }
+
+    bool handled = false;
+    if (element->onKey) {
+        element->onKey(event);
+        handled = true;
+        composeRequested_ = true;
+        paintRequested_ = true;
+    }
+    if (event.action == KeyAction::Press &&
+        (event.key == InputKey::Enter || event.key == InputKey::Space) &&
+        element->onActivate && focusedId_ == targetId) {
+        handled = activateFocused() || handled;
+    }
+    return handled;
+}
+
 inline void Runtime::setFocusedId(const std::string& id) {
     if (focusedId_ == id) {
         return;
@@ -281,7 +392,8 @@ inline void Runtime::updateTextInput(const KeyboardEvent& event) {
         return;
     }
 
-    if (isElementInDisabledTree(focusedId_)) {
+    const std::vector<std::string> ids = focusableIds();
+    if (std::find(ids.begin(), ids.end(), focusedId_) == ids.end()) {
         setFocusedId({});
         return;
     }

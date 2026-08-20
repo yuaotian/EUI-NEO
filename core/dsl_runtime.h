@@ -162,6 +162,18 @@ private:
 
     void setFocusedId(const std::string& id);
 
+    // 键盘焦点按 compose/document DFS 顺序遍历；z-index 只影响绘制，不改变键盘顺序。
+    std::vector<std::string> focusableIds() const;
+    bool focusNext(bool reverse = false);
+    // 分发单个离散按键；Tab 负责焦点移动，Enter/Space 在 Press 边沿触发 onActivate。
+    bool dispatchKey(const KeyEvent& event);
+    bool activateFocused();
+
+    void collectFocusableIds(const Element& element,
+                             bool ancestorDisabled,
+                             bool ancestorVisible,
+                             std::vector<std::string>& ids) const;
+
     void updateScroll(const ScrollEvent& event, const std::string& targetId);
 
     void updateTextInput(const KeyboardEvent& event);

@@ -172,6 +172,8 @@ bool mapKey(SDL_Keycode key, core::InputKey& mapped) {
     case SDLK_HOME: mapped = core::InputKey::Home; return true;
     case SDLK_END: mapped = core::InputKey::End; return true;
     case SDLK_ESCAPE: mapped = core::InputKey::Escape; return true;
+    case SDLK_TAB: mapped = core::InputKey::Tab; return true;
+    case SDLK_SPACE: mapped = core::InputKey::Space; return true;
     case SDLK_a: mapped = core::InputKey::A; return true;
     case SDLK_c: mapped = core::InputKey::C; return true;
     case SDLK_v: mapped = core::InputKey::V; return true;

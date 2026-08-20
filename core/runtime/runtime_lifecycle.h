@@ -29,8 +29,12 @@ inline void Runtime::compose(const std::string& pageId, float logicalWidth, floa
             ui_.setFocusedId(focusedId_);
         }
     }
-    if (!focusedId_.empty() && isElementInDisabledTree(focusedId_)) {
-        setFocusedId({});
+    if (!focusedId_.empty()) {
+        const std::vector<std::string> focusIds = focusableIds();
+        if (std::find(focusIds.begin(), focusIds.end(), focusedId_) == focusIds.end()) {
+            // compose 后元素可能被删除、禁用或透明隐藏，不能保留悬空焦点。
+            setFocusedId({});
+        }
     }
 
     if (elementStructure_ != previousStructure) {
@@ -105,7 +109,18 @@ inline bool Runtime::update(core::window::Handle window, float deltaSeconds, flo
     updateDependentVisualDirtyRegions(dpiScale);
 
     if (keyboardEvent.hasInput()) {
-        updateTextInput(keyboardEvent);
+        // 文本/IME 先以聚合事件交付一次，保持原有编辑合同；按键随后逐个交付，保证同一 tick 的顺序。
+        KeyboardEvent textEvent = keyboardEvent;
+        textEvent.keys.clear();
+        if (textEvent.hasInput()) {
+            updateTextInput(textEvent);
+        }
+        for (const KeyEvent& key : keyboardEvent.keys) {
+            KeyboardEvent keyEvent;
+            keyEvent.keys.push_back(key);
+            updateTextInput(keyEvent);
+            dispatchKey(key);
+        }
     }
     instances_.releaseUnseenTimers();
     updateImeCursorRect(window, dpiScale);

@@ -37,6 +37,8 @@ enum class InputKey {
     Home,
     End,
     Escape,
+    Tab,
+    Space,
     A,
     C,
     V,

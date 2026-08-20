@@ -168,6 +168,9 @@ struct Element {
     std::function<void(bool)> onHoverChanged;
     std::function<void(bool)> onFocusChanged;
     std::function<void(const KeyboardEvent&)> onTextInput;
+    // 键盘合同与文本输入分离：onKey 接收当前焦点元素的离散按键，onActivate 处理 Enter/Space 激活。
+    std::function<void(const KeyEvent&)> onKey;
+    std::function<void()> onActivate;
     std::function<void(const ScrollEvent&)> onScroll;
     std::function<void(float)> onScrollOffsetChanged;
     std::function<void(const DragEvent&)> onDrag;
@@ -704,6 +707,21 @@ public:
         element_->focusable = true;
         element_->interactive = true;
         element_->onTextInput = std::move(callback);
+        return self();
+    }
+
+    Derived& onKey(std::function<void(const KeyEvent&)> callback) {
+        element_->focusable = true;
+        element_->interactive = true;
+        element_->onKey = std::move(callback);
+        return self();
+    }
+
+    Derived& onActivate(std::function<void()> callback) {
+        element_->focusable = true;
+        element_->interactive = true;
+        element_->cursor = CursorShape::Hand;
+        element_->onActivate = std::move(callback);
         return self();
     }
 
@@ -1655,6 +1673,8 @@ private:
                element.onHoverChanged ||
                element.onFocusChanged ||
                element.onTextInput ||
+               element.onKey ||
+               element.onActivate ||
                element.onScroll ||
                element.onScrollOffsetChanged ||
                element.onDrag ||
@@ -1702,6 +1722,8 @@ private:
                element.onHoverChanged ||
                element.onFocusChanged ||
                element.onTextInput ||
+               element.onKey ||
+               element.onActivate ||
                element.onScroll ||
                element.onScrollOffsetChanged ||
                element.onDrag ||
