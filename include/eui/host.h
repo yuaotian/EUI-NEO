@@ -42,6 +42,7 @@ struct WindowConfig {
     // Tool 仅允许 Main owner；Dialog 必填、Popup 可选，且二者 owner 必须可激活并属于同一 host。
     WindowId owner = kInvalidWindowId;
     // positioned=false 时由平台决定 normal bounds，但仍保留 maximized 首次显示状态。
+    // noActivate 窗口不接受 maximized initial/dynamic placement。
     std::optional<WindowPlacement> initialPlacement;
     // 首版保留 EUI 请求语义，不把它解释为 Win32 父子窗口关系。
     bool modal = false;
@@ -76,6 +77,7 @@ public:
 
     WindowId createWindow(const WindowConfig& config);
     bool showWindow(WindowId id);
+    // 存在 visible modal child 时拒绝隐藏 owner，并把焦点保留给 modal child。
     bool hideWindow(WindowId id);
     bool setWindowAlwaysOnTop(WindowId id, bool enabled);
     bool setWindowClickThrough(WindowId id, bool enabled);

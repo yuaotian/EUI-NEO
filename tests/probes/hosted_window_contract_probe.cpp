@@ -55,6 +55,33 @@ void pumpMessages() {
     }
 }
 
+HWND createExternalFocusProbe() {
+    return CreateWindowExW(WS_EX_TOOLWINDOW,
+                           L"STATIC",
+                           L"EUI external focus probe",
+                           WS_OVERLAPPEDWINDOW,
+                           40,
+                           40,
+                           240,
+                           140,
+                           nullptr,
+                           nullptr,
+                           GetModuleHandleW(nullptr),
+                           nullptr);
+}
+
+bool activateExternalFocusProbe(HWND hwnd) {
+    if (hwnd == nullptr) {
+        return false;
+    }
+    ShowWindow(hwnd, SW_SHOW);
+    SetActiveWindow(hwnd);
+    SetForegroundWindow(hwnd);
+    SetFocus(hwnd);
+    pumpMessages();
+    return IsWindowVisible(hwnd) != FALSE && GetForegroundWindow() == hwnd;
+}
+
 HWND nativeHwnd(eui::EuiAppHost& host, eui::WindowId id) {
     return static_cast<HWND>(host.nativeWindowInfo(id).platformWindow);
 }
@@ -162,6 +189,13 @@ int main() {
     invalidClickThrough.clickThrough = true;
     expect(host.createWindow(invalidClickThrough) == eui::kInvalidWindowId,
            "拒绝带装饰窗口启用 click-through");
+
+    eui::WindowConfig invalidNoActivateMaximized = baseConfig("invalid-no-activate-maximized");
+    invalidNoActivateMaximized.role = eui::WindowRole::Popup;
+    invalidNoActivateMaximized.initialPlacement =
+        eui::WindowPlacement{true, 100, 100, 320, 200, true};
+    expect(host.createWindow(invalidNoActivateMaximized) == eui::kInvalidWindowId,
+           "拒绝 no-activate 窗口初始最大化");
 
     eui::WindowConfig mainConfig = baseConfig("contract-main");
     mainConfig.role = eui::WindowRole::Main;
@@ -320,6 +354,15 @@ int main() {
                GetPropW(popupHwnd, L"EuiNeoImeFilter") != nullptr &&
                GetPropW(overlayHwnd, L"EuiNeoImeFilter") != nullptr,
            "Popup/Overlay IME filter 已安装");
+    expect(SendMessageW(popupHwnd,
+                        WM_MOUSEACTIVATE,
+                        reinterpret_cast<WPARAM>(mainHwnd),
+                        MAKELPARAM(HTCLIENT, WM_LBUTTONDOWN)) == MA_NOACTIVATE &&
+               SendMessageW(overlayHwnd,
+                            WM_MOUSEACTIVATE,
+                            reinterpret_cast<WPARAM>(mainHwnd),
+                            MAKELPARAM(HTCLIENT, WM_LBUTTONDOWN)) == MA_NOACTIVATE,
+           "Popup/Overlay 鼠标点击路径明确保持 no-activate");
 
     expect(host.showWindow(mainId), "显式显示 Main");
     expect(host.showWindow(toolId), "显式显示 Tool");
@@ -335,10 +378,45 @@ int main() {
     pumpMessages();
     expect(!host.shouldClose(toolId) && GetFocus() == dialogHwnd,
            "modal Dialog 阻止 owner 关闭并保留焦点");
+    expect(!host.hideWindow(toolId) && host.isVisible(toolId) &&
+               IsWindowVisible(toolHwnd) != FALSE && IsWindowEnabled(toolHwnd) == FALSE &&
+               GetFocus() == dialogHwnd,
+           "visible modal Dialog 阻止 owner 隐藏并保留焦点");
     expect(host.hideWindow(dialogId), "隐藏 modal Dialog");
     pumpMessages();
     expect(IsWindowEnabled(toolHwnd) != FALSE && GetFocus() == toolHwnd,
            "最后一个 modal Dialog 隐藏后恢复 owner 与焦点");
+
+    eui::WindowConfig externalFocusDialogConfig = baseConfig("external-focus-dialog");
+    externalFocusDialogConfig.role = eui::WindowRole::Dialog;
+    externalFocusDialogConfig.owner = toolId;
+    externalFocusDialogConfig.modal = true;
+    const eui::WindowId externalFocusDialogId = host.createWindow(externalFocusDialogConfig);
+    HWND externalFocusDialogHwnd = nativeHwnd(host, externalFocusDialogId);
+    expect(externalFocusDialogId != eui::kInvalidWindowId && externalFocusDialogHwnd != nullptr,
+           "创建外部前台切换用 modal Dialog");
+    expect(host.showWindow(externalFocusDialogId), "显示外部前台切换用 modal Dialog");
+    pumpMessages();
+    HWND externalFocusHwnd = createExternalFocusProbe();
+    expect(activateExternalFocusProbe(externalFocusHwnd), "切换到 host 外部 probe HWND");
+    expect(!host.hideWindow(toolId) && GetForegroundWindow() == externalFocusHwnd,
+           "外部前台时拒绝隐藏 modal owner 且不抢前台");
+    expect(host.hideWindow(externalFocusDialogId), "外部前台时隐藏 modal Dialog");
+    pumpMessages();
+    expect(IsWindowEnabled(toolHwnd) != FALSE && GetForegroundWindow() == externalFocusHwnd,
+           "隐藏 modal Dialog 只恢复 owner enabled 且不抢外部前台");
+
+    expect(host.showWindow(externalFocusDialogId), "重新显示外部前台切换用 modal Dialog");
+    pumpMessages();
+    expect(activateExternalFocusProbe(externalFocusHwnd), "再次切换到 host 外部 probe HWND");
+    expect(host.destroyWindow(externalFocusDialogId), "外部前台时销毁 modal Dialog");
+    pumpMessages();
+    expect(IsWindowEnabled(toolHwnd) != FALSE && GetForegroundWindow() == externalFocusHwnd,
+           "销毁 modal Dialog 只恢复 owner enabled 且不抢外部前台");
+    DestroyWindow(externalFocusHwnd);
+    SetForegroundWindow(toolHwnd);
+    SetFocus(toolHwnd);
+    pumpMessages();
 
     const HWND foregroundBeforePopupShow = GetForegroundWindow();
     expect(host.showWindow(popupId), "显式显示 Popup");
@@ -351,6 +429,20 @@ int main() {
     const auto movedPopupPlacement = host.windowPlacement(popupId);
     expect(movedPopupPlacement.has_value() && sameNormalBounds(*movedPopupPlacement, movedPopup),
            "动态 Popup bounds 可 query round-trip");
+    const HWND foregroundBeforeSecondPopupMove = GetForegroundWindow();
+    const eui::WindowPlacement movedPopupAgain{true, 500, 350, 420, 270, false};
+    expect(host.setWindowPlacement(popupId, movedPopupAgain), "第二次动态设置 Popup bounds");
+    const auto movedPopupAgainPlacement = host.windowPlacement(popupId);
+    expect(movedPopupAgainPlacement.has_value() &&
+               sameNormalBounds(*movedPopupAgainPlacement, movedPopupAgain),
+           "第二次动态 Popup bounds 可 query round-trip");
+    expect(GetForegroundWindow() == foregroundBeforeSecondPopupMove &&
+               GetForegroundWindow() != popupHwnd,
+           "第二次动态 Popup placement 不改变前台窗口");
+    eui::WindowPlacement invalidPopupMaximized = movedPopupAgain;
+    invalidPopupMaximized.maximized = true;
+    expect(!host.setWindowPlacement(popupId, invalidPopupMaximized),
+           "拒绝 no-activate 窗口动态最大化");
     expect(host.setWindowAlwaysOnTop(popupId, false) &&
                !hasExtendedStyle(popupHwnd, WS_EX_TOPMOST),
            "动态关闭 Popup always-on-top");

@@ -116,6 +116,42 @@ void focusHostedWindow(HostedWindow* hosted) {
     }
 }
 
+bool foregroundBelongsToHostedSubtree(const EuiAppHostState& state, WindowId root) {
+#if defined(_WIN32)
+    HWND activeHwnd = GetForegroundWindow();
+    if (activeHwnd == nullptr) {
+        activeHwnd = GetActiveWindow();
+    }
+
+    WindowId activeId = kInvalidWindowId;
+    for (const auto& entry : state.windows) {
+        if (entry.second && nativeHwnd(*entry.second) == activeHwnd) {
+            activeId = entry.first;
+            break;
+        }
+    }
+    while (activeId != kInvalidWindowId) {
+        if (activeId == root) {
+            return true;
+        }
+        const auto iterator = state.windows.find(activeId);
+        if (iterator == state.windows.end() || !iterator->second) {
+            return false;
+        }
+        activeId = iterator->second->owner;
+    }
+    return false;
+#else
+    (void)state;
+    (void)root;
+    return true;
+#endif
+}
+
+bool shouldRestoreModalFocus(const EuiAppHostState& state, const HostedWindow& modal) {
+    return modal.modalActive && foregroundBelongsToHostedSubtree(state, modal.id);
+}
+
 void activateModalOwner(EuiAppHostState& state, HostedWindow& modal) {
     if (!modal.modal || modal.modalActive || modal.owner == kInvalidWindowId) {
         return;
@@ -377,6 +413,8 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
         effective.minWidth < 0 || effective.minHeight < 0 ||
         (effective.initialPlacement && !validPlacementBounds(*effective.initialPlacement)) ||
         (effective.clickThrough && !effective.borderless) ||
+        (effective.noActivate && effective.initialPlacement &&
+         effective.initialPlacement->maximized) ||
         (effective.modal && (effective.role != WindowRole::Dialog || effective.noActivate))) {
         return kInvalidWindowId;
     }
@@ -516,13 +554,20 @@ bool EuiAppHost::hideWindow(WindowId id) {
     if (iterator == impl_->state.windows.end() || !iterator->second) {
         return false;
     }
+    if (HostedWindow* modal = newestVisibleModalChild(impl_->state, id)) {
+        if (foregroundBelongsToHostedSubtree(impl_->state, id)) {
+            focusHostedWindow(modal);
+        }
+        return false;
+    }
 
     HostedWindow& hosted = *iterator->second;
     const bool wasVisible = hosted.visible;
+    const bool restoreModalFocus = shouldRestoreModalFocus(impl_->state, hosted);
     hosted.visible = false;
     glfwHideWindow(hosted.window);
     if (wasVisible) {
-        deactivateModalOwner(impl_->state, hosted, true);
+        deactivateModalOwner(impl_->state, hosted, restoreModalFocus);
     }
     if (hosted.renderer) {
         hosted.renderer->makeCurrent();
@@ -592,8 +637,9 @@ bool EuiAppHost::destroyWindow(WindowId id) {
         }
     }
 
+    const bool restoreModalFocus = shouldRestoreModalFocus(impl_->state, *iterator->second);
     iterator->second->visible = false;
-    deactivateModalOwner(impl_->state, *iterator->second, true);
+    deactivateModalOwner(impl_->state, *iterator->second, restoreModalFocus);
     destroyHostedWindow(iterator->second);
     impl_->state.windows.erase(iterator);
     return true;

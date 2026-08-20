@@ -711,7 +711,9 @@ bool applyWindowContract(GLFWwindow* window, const WindowCreateRequest& request)
 
 Handle createWindow(const WindowCreateRequest& request) {
     if (request.minWidth < 0 || request.minHeight < 0 ||
-        (request.clickThrough && !request.borderless)) {
+        (request.clickThrough && !request.borderless) ||
+        (request.noActivate && request.initialPlacement &&
+         request.initialPlacement->maximized)) {
         return nullptr;
     }
     glfwDefaultWindowHints();
@@ -815,6 +817,15 @@ bool setWindowPlacement(Handle window, const WindowPlacement& placement) {
     if (hwnd == nullptr) {
         return false;
     }
+    SetLastError(ERROR_SUCCESS);
+    const LONG_PTR extendedStyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if (extendedStyle == 0 && GetLastError() != ERROR_SUCCESS) {
+        return false;
+    }
+    const bool noActivate = (extendedStyle & WS_EX_NOACTIVATE) != 0;
+    if (noActivate && placement.maximized) {
+        return false;
+    }
     WINDOWPLACEMENT nativePlacement{};
     nativePlacement.length = sizeof(nativePlacement);
     if (GetWindowPlacement(hwnd, &nativePlacement) == FALSE) {
@@ -824,9 +835,14 @@ bool setWindowPlacement(Handle window, const WindowPlacement& placement) {
     nativePlacement.rcNormalPosition.top = placement.y;
     nativePlacement.rcNormalPosition.right = placement.x + placement.width;
     nativePlacement.rcNormalPosition.bottom = placement.y + placement.height;
-    nativePlacement.showCmd = IsWindowVisible(hwnd) == FALSE
-        ? SW_HIDE
-        : (placement.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL);
+    if (IsWindowVisible(hwnd) == FALSE) {
+        nativePlacement.showCmd = SW_HIDE;
+    } else if (noActivate) {
+        // 沿用 rcNormalPosition 坐标合同，同时避免 normal placement 激活窗口。
+        nativePlacement.showCmd = SW_SHOWNOACTIVATE;
+    } else {
+        nativePlacement.showCmd = placement.maximized ? SW_SHOWMAXIMIZED : SW_SHOWNORMAL;
+    }
     return SetWindowPlacement(hwnd, &nativePlacement) != FALSE;
 #else
     glfwSetWindowPos(glfwWindow, placement.x, placement.y);

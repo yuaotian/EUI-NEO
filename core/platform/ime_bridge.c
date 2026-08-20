@@ -119,6 +119,11 @@ static void eui_ime_reapply_cursor_rect(HWND hwnd, EuiImeFilterState* state) {
 
 static LRESULT CALLBACK eui_ime_window_proc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
     EuiImeFilterState* state = (EuiImeFilterState*)GetPropW(hwnd, EUI_IME_FILTER_PROP);
+    if (message == WM_MOUSEACTIVATE &&
+        (GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_NOACTIVATE) != 0) {
+        // 无激活窗口必须在真实鼠标点击路径上明确拒绝激活。
+        return MA_NOACTIVATE;
+    }
     const BOOL placementChanged = message == WM_IME_COMPOSITION ||
                                   (message == WM_IME_NOTIFY &&
                                    (wParam == IMN_OPENCANDIDATE || wParam == IMN_CHANGECANDIDATE));
