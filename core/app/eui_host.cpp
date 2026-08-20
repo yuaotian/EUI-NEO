@@ -12,7 +12,6 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include <map>
 #include <memory>
@@ -38,7 +37,6 @@ struct HostedWindow {
 struct EuiAppHostState {
     bool initialized = false;
     WindowId nextWindowId = 1;
-    double lastNow = 0.0;
     std::map<WindowId, std::unique_ptr<HostedWindow>> windows;
 };
 
@@ -164,7 +162,6 @@ bool EuiAppHost::initialize() {
         return false;
     }
     impl_->state.initialized = true;
-    impl_->state.lastNow = core::window::timeSeconds();
     return true;
 }
 
@@ -180,7 +177,6 @@ void EuiAppHost::shutdown() {
     glfwTerminate();
     impl_->state.initialized = false;
     impl_->state.nextWindowId = 1;
-    impl_->state.lastNow = 0.0;
 }
 
 bool EuiAppHost::initialized() const {
@@ -215,6 +211,8 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     glfwWindowHint(GLFW_VISIBLE, config.visible ? GLFW_TRUE : GLFW_FALSE);
 
     auto* window = static_cast<GLFWwindow*>(core::window::createWindow(nativeRequest));
+    // GLFW hint 是进程全局状态；创建后恢复默认值，避免影响其他窗口创建路径。
+    glfwWindowHint(GLFW_VISIBLE, GLFW_TRUE);
     if (window == nullptr) {
         return kInvalidWindowId;
     }
@@ -330,7 +328,6 @@ TickResult EuiAppHost::tick(double nowSeconds, bool updateRequested) {
     }
 
     const double now = nowSeconds >= 0.0 ? nowSeconds : core::window::timeSeconds();
-    impl_->state.lastNow = now;
 
     for (auto& entry : impl_->state.windows) {
         HostedWindow& hosted = *entry.second;

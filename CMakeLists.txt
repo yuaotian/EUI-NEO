@@ -227,7 +227,6 @@ set(CORE_SOURCES
     core/platform/tray_bridge.c
     core/window/window_backend.cpp
     core/window/window_input_backend.cpp
-    core/app/eui_host.cpp
 )
 
 if(EUI_RESOLVED_RENDER_BACKEND STREQUAL "opengl")
@@ -243,7 +242,10 @@ elseif(EUI_RESOLVED_RENDER_BACKEND STREQUAL "vulkan")
 endif()
 
 if(EUI_WINDOW_BACKEND STREQUAL "glfw")
-    list(APPEND CORE_SOURCES core/platform/ime_bridge.c)
+    list(APPEND CORE_SOURCES
+        core/platform/ime_bridge.c
+        core/app/eui_host.cpp
+    )
 endif()
 
 # -----------------------------------------------------------------------------
