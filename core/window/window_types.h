@@ -36,6 +36,9 @@ struct WindowPlacement {
 struct WindowCreateRequest {
     int width = 0;
     int height = 0;
+    // 0 表示对应方向不限制最小尺寸，负值属于非法请求。
+    int minWidth = 0;
+    int minHeight = 0;
     const char* title = "";
     bool resizable = true;
     bool highDpi = true;

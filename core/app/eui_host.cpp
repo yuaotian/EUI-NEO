@@ -226,6 +226,7 @@ double EuiAppHost::timeSeconds() const {
 WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     if (!impl_->state.initialized || !config.compose ||
         config.width <= 0 || config.height <= 0 ||
+        config.minWidth < 0 || config.minHeight < 0 ||
         (config.initialPlacement && !validPlacementBounds(*config.initialPlacement))) {
         return kInvalidWindowId;
     }
@@ -254,6 +255,8 @@ WindowId EuiAppHost::createWindow(const WindowConfig& config) {
     core::window::WindowCreateRequest nativeRequest;
     nativeRequest.width = config.width;
     nativeRequest.height = config.height;
+    nativeRequest.minWidth = config.minWidth;
+    nativeRequest.minHeight = config.minHeight;
     nativeRequest.title = request.title.c_str();
     nativeRequest.resizable = config.resizable;
     nativeRequest.highDpi = config.highDpi;

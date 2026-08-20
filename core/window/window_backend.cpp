@@ -336,6 +336,9 @@ float x11ContentScale(Handle window) {
 }
 
 Handle createWindow(const WindowCreateRequest& request) {
+    if (request.minWidth < 0 || request.minHeight < 0) {
+        return nullptr;
+    }
     if (request.renderApi == RenderApi::OpenGL) {
         configureOpenGLWindowAttributes();
     }
@@ -356,6 +359,9 @@ Handle createWindow(const WindowCreateRequest& request) {
         request.width,
         request.height,
         flags);
+    if (window != nullptr && (request.minWidth > 0 || request.minHeight > 0)) {
+        SDL_SetWindowMinimumSize(window, request.minWidth, request.minHeight);
+    }
 #if defined(__linux__) && !defined(__ANDROID__) && defined(SDL_VIDEO_DRIVER_X11)
     if (window != nullptr && request.highDpi) {
         const float scale = x11ContentScale(window);
@@ -671,6 +677,9 @@ bool applyWindowContract(GLFWwindow* window, const WindowCreateRequest& request)
 } // namespace
 
 Handle createWindow(const WindowCreateRequest& request) {
+    if (request.minWidth < 0 || request.minHeight < 0) {
+        return nullptr;
+    }
     GLFWwindow* shareContext = nullptr;
     if (request.renderApi == RenderApi::Vulkan) {
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
@@ -696,6 +705,12 @@ Handle createWindow(const WindowCreateRequest& request) {
         glfwDestroyWindow(window);
         return nullptr;
     }
+    glfwSetWindowSizeLimits(
+        window,
+        request.minWidth > 0 ? request.minWidth : GLFW_DONT_CARE,
+        request.minHeight > 0 ? request.minHeight : GLFW_DONT_CARE,
+        GLFW_DONT_CARE,
+        GLFW_DONT_CARE);
     return window;
 }
 

@@ -64,6 +64,36 @@ bool hasRoleStyle(HWND hwnd, eui::WindowRole role) {
     }
     return (style & WS_EX_APPWINDOW) != 0 && (style & WS_EX_TOOLWINDOW) == 0;
 }
+
+bool hasMinimumTrackSize(HWND hwnd, int minWidth, int minHeight) {
+    if (hwnd == nullptr) {
+        return false;
+    }
+
+    MINMAXINFO limits{};
+    SendMessageW(hwnd, WM_GETMINMAXINFO, 0, reinterpret_cast<LPARAM>(&limits));
+
+    RECT expected{0, 0, minWidth, minHeight};
+    const DWORD style = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_STYLE));
+    const DWORD exStyle = static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+    using AdjustWindowRectExForDpiFn = BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    const auto getDpiForWindow = reinterpret_cast<GetDpiForWindowFn>(
+        GetProcAddress(user32, "GetDpiForWindow"));
+    const auto adjustForDpi = reinterpret_cast<AdjustWindowRectExForDpiFn>(
+        GetProcAddress(user32, "AdjustWindowRectExForDpi"));
+
+    BOOL adjusted = FALSE;
+    if (getDpiForWindow != nullptr && adjustForDpi != nullptr) {
+        adjusted = adjustForDpi(&expected, style, FALSE, exStyle, getDpiForWindow(hwnd));
+    } else {
+        adjusted = AdjustWindowRectEx(&expected, style, FALSE, exStyle);
+    }
+    return adjusted != FALSE &&
+           limits.ptMinTrackSize.x == expected.right - expected.left &&
+           limits.ptMinTrackSize.y == expected.bottom - expected.top;
+}
 #endif
 
 } // namespace
@@ -90,8 +120,18 @@ int main() {
     invalidPlacement.initialPlacement = eui::WindowPlacement{true, 100, 100, 0, 300, false};
     expect(host.createWindow(invalidPlacement) == eui::kInvalidWindowId, "拒绝非法 positioned placement");
 
+    eui::WindowConfig invalidMinWidth = baseConfig("invalid-min-width");
+    invalidMinWidth.minWidth = -1;
+    expect(host.createWindow(invalidMinWidth) == eui::kInvalidWindowId, "拒绝负数 minWidth");
+
+    eui::WindowConfig invalidMinHeight = baseConfig("invalid-min-height");
+    invalidMinHeight.minHeight = -1;
+    expect(host.createWindow(invalidMinHeight) == eui::kInvalidWindowId, "拒绝负数 minHeight");
+
     eui::WindowConfig mainConfig = baseConfig("contract-main");
     mainConfig.role = eui::WindowRole::Main;
+    mainConfig.minWidth = 520;
+    mainConfig.minHeight = 320;
     mainConfig.initialPlacement = eui::WindowPlacement{true, 240, 180, 640, 420, false};
     const HWND foregroundBeforeMain = GetForegroundWindow();
     const eui::WindowId mainId = host.createWindow(mainConfig);
@@ -102,6 +142,8 @@ int main() {
     expect(IsWindowVisible(mainHwnd) == FALSE, "Main create 后保持隐藏");
     expect(foregroundBeforeTool == foregroundBeforeMain, "Main create 不改变前台窗口");
     expect(hasRoleStyle(mainHwnd, eui::WindowRole::Main), "Main 使用 APPWINDOW 样式");
+    expect(hasMinimumTrackSize(mainHwnd, mainConfig.minWidth, mainConfig.minHeight),
+           "Main 应用最小跟踪尺寸");
 
     const auto mainInitial = host.windowPlacement(mainId);
     expect(mainInitial.has_value() && sameNormalBounds(*mainInitial, *mainConfig.initialPlacement),
@@ -114,6 +156,8 @@ int main() {
     eui::WindowConfig toolConfig = baseConfig("contract-tool");
     toolConfig.role = eui::WindowRole::Tool;
     toolConfig.owner = mainId;
+    toolConfig.minWidth = 360;
+    toolConfig.minHeight = 240;
     toolConfig.initialPlacement = eui::WindowPlacement{true, 320, 260, 480, 300, false};
     const eui::WindowId toolId = host.createWindow(toolConfig);
     expect(toolId != eui::kInvalidWindowId, "创建隐藏 Tool");
@@ -123,6 +167,8 @@ int main() {
     expect(GetForegroundWindow() == foregroundBeforeTool, "Tool create 不改变前台窗口");
     expect(hasRoleStyle(toolHwnd, eui::WindowRole::Tool), "Tool 使用 TOOLWINDOW 样式");
     expect(GetWindow(toolHwnd, GW_OWNER) == mainHwnd, "Tool GW_OWNER 指向 Main");
+    expect(hasMinimumTrackSize(toolHwnd, toolConfig.minWidth, toolConfig.minHeight),
+           "Tool 应用最小跟踪尺寸");
 
     const auto toolInitial = host.windowPlacement(toolId);
     expect(toolInitial.has_value() && sameNormalBounds(*toolInitial, *toolConfig.initialPlacement),

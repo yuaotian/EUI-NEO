@@ -25,6 +25,9 @@ struct WindowConfig {
     Color clearColor = {0.16f, 0.18f, 0.20f, 1.0f};
     int width = 640;
     int height = 420;
+    // 0 表示对应方向不限制最小尺寸，负值属于非法请求。
+    int minWidth = 0;
+    int minHeight = 0;
     bool resizable = true;
     bool highDpi = true;
     bool visible = true;
